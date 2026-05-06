@@ -181,21 +181,19 @@ function App() {
   };
 
   const buildFallbackStudy = (file: File): Study => {
-    const isDicom = file.name.toLowerCase().endsWith(".dcm") || file.type === "application/dicom";
-    const canPreview = file.type.startsWith("image/");
-    const previewUrl = canPreview ? URL.createObjectURL(file) : undefined;
+    const isDicom = true;
 
     return {
       id: `LOCAL-${Date.now()}`,
       patientName: file.name,
       patientDetail: "Local file",
-      modality: isDicom ? "DICOM" : "IMG",
+      modality: "DICOM",
       bodyPart: "Unspecified",
       timestamp: "Just now",
-      series: isDicom ? "DICOM series" : "Image preview",
-      slices: isDicom ? 1 : 1,
+      series: "DICOM series",
+      slices: 1,
       uploadedFileName: file.name,
-      previewUrl,
+      previewUrl: undefined,
       isDicom,
       status: "ready",
       reviewDecision: "unreviewed",
@@ -218,6 +216,14 @@ function App() {
   };
 
   const handleStudyFile = async (file: File) => {
+    const isDicomSelection =
+      file.name.toLowerCase().endsWith(".dcm") ||
+      file.name.toLowerCase().endsWith(".dicom") ||
+      file.type === "application/dicom";
+    if (!isDicomSelection) {
+      return;
+    }
+
     const fallbackStudy = buildFallbackStudy(file);
 
     try {
@@ -388,7 +394,7 @@ function StudyPanel({ studies, activeStudyId, onFiles, onSelectStudy }: StudyPan
   return (
     <aside className="flex min-h-0 flex-col border-r border-slate-800 bg-[#080d15] max-lg:min-h-[360px]">
       <header className="border-b border-slate-800 px-4 py-4">
-        <input ref={fileInputRef} className="hidden" type="file" multiple accept=".dcm,image/png,image/jpeg,image/webp" onChange={handleFileInput} />
+        <input ref={fileInputRef} className="hidden" type="file" multiple accept=".dcm,.dicom,application/dicom" onChange={handleFileInput} />
         <button
           className="flex w-full items-center justify-center gap-2 rounded-md border border-cyan-400/25 bg-cyan-400/10 px-3 py-2 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-400/15"
           type="button"
@@ -662,7 +668,7 @@ function ViewerWorkspace({
               <div className="absolute inset-0 grid place-items-center">
                 <div className="rounded-md border border-slate-700/70 bg-[#070d17]/90 px-6 py-5 text-center">
                   <p className="text-sm font-semibold text-slate-200">No study loaded</p>
-                  <p className="mt-1 text-xs text-slate-400">Upload DICOM or image to start ROI-based segmentation.</p>
+                  <p className="mt-1 text-xs text-slate-400">Upload DICOM to start ROI-based segmentation.</p>
                 </div>
               </div>
             </div>
@@ -683,7 +689,7 @@ function ViewerWorkspace({
             <div className="absolute inset-0 grid place-items-center bg-cyan-950/45 backdrop-blur-sm">
               <div className="rounded-md border border-cyan-300/50 bg-slate-950/85 px-6 py-5 text-center shadow-active-glow">
                 <Upload className="mx-auto h-7 w-7 text-cyan-200" />
-                <p className="mt-2 text-sm font-semibold text-white">Drop DICOM or image study</p>
+                <p className="mt-2 text-sm font-semibold text-white">Drop DICOM study</p>
                 <p className="mt-1 text-xs text-cyan-100/80">DICOM backend rendering plugs in here</p>
               </div>
             </div>

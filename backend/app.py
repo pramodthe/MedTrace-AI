@@ -108,7 +108,6 @@ def llm_status() -> dict:
 @app.post("/studies")
 async def create_study(file: UploadFile = File(...)) -> dict:
     filename = file.filename or "uploaded-study"
-    is_dicom = filename.lower().endswith(".dcm") or file.content_type == "application/dicom"
     study_id = f"ST-{int(time())}"
     study_dir = STUDIES_DIR / study_id
     study_dir.mkdir(parents=True, exist_ok=True)
@@ -117,22 +116,25 @@ async def create_study(file: UploadFile = File(...)) -> dict:
     with stored_path.open("wb") as output:
         copyfileobj(file.file, output)
 
-    metadata = {}
-    preview_url = None
-    if is_dicom:
-        metadata = render_dicom_preview(stored_path, study_dir)
-        preview_url = f"/data/studies/{study_id}/preview.png"
+    if not is_dicom_file(stored_path):
+        raise HTTPException(
+            status_code=400,
+            detail="Only DICOM uploads are supported. Please upload a valid .dcm study file.",
+        )
+
+    metadata = render_dicom_preview(stored_path, study_dir)
+    preview_url = f"/data/studies/{study_id}/preview.png"
 
     return {
         "id": study_id,
-        "patientName": metadata.get("patientName", filename if not is_dicom else "Uploaded Study"),
-        "patientDetail": metadata.get("patientDetail", "DICOM metadata pending" if is_dicom else "Local image"),
-        "modality": metadata.get("modality", "DICOM" if is_dicom else "IMG"),
+        "patientName": metadata.get("patientName", "Uploaded Study"),
+        "patientDetail": metadata.get("patientDetail", "DICOM metadata pending"),
+        "modality": metadata.get("modality", "DICOM"),
         "bodyPart": metadata.get("bodyPart", "Unspecified"),
         "series": metadata.get("series", "Uploaded series"),
         "slices": metadata.get("slices", 1),
         "uploadedFileName": filename,
-        "isDicom": is_dicom,
+        "isDicom": True,
         "previewUrl": preview_url,
     }
 
@@ -239,3 +241,13 @@ def render_dicom_preview(dicom_path: Path, study_dir: Path) -> dict:
         "series": series,
         "slices": 1,
     }
+
+
+def is_dicom_file(path: Path) -> bool:
+    try:
+        import pydicom
+
+        pydicom.dcmread(path, stop_before_pixels=True)
+        return True
+    except Exception:
+        return False
