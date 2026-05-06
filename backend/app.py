@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 from shutil import copy2, copyfileobj
 from time import time
-from typing import Literal
+from typing import Literal, Optional
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -77,6 +77,7 @@ class SegmentationResponse(BaseModel):
     volumeMl: float
     source: Literal["medsam2"]
     box: RoiPrompt
+    overlayUrl: Optional[str] = None
 
 
 class ReportRequest(BaseModel):

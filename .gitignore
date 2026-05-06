@@ -36,15 +36,23 @@ backend/data/studies/
 backend/uploads/
 *.log
 
+# Nested repositories / service-local git metadata
+**/.git/
+
+# MedSAMlite service local artifacts
+services/medsamlite/.venv/
+services/medsamlite/data/
+services/medsamlite/**/*.pth
+services/medsamlite/**/*.npz
+services/medsamlite/Swin_LiteMedSam/*.pth
+
 # IDE
 .idea/
 .vscode/
-.claude/
+.claude
 .cursor/
 *.swp
 *.swo
 
 # OS
 Thumbs.db
-
-.claude

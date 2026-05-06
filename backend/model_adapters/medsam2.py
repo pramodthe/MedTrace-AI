@@ -2,9 +2,14 @@ from __future__ import annotations
 
 import importlib
 import os
+from io import BytesIO
+from pathlib import Path
+from time import time_ns
 from typing import Any
 
 import httpx
+import numpy as np
+from PIL import Image
 
 
 class MedSAM2Service:
@@ -35,21 +40,117 @@ class MedSAM2Service:
         }
 
         if self.endpoint:
-            return self._segment_http(payload)
+            return self._segment_http(study_id=study_id, prompt=prompt, payload=payload)
 
         if self.adapter_module:
             return self._segment_adapter(study_id, prompt)
 
         return self._mock_segmentation(study_id, prompt)
 
-    def _segment_http(self, payload: dict[str, Any]) -> dict[str, Any]:
-        response = httpx.post(
-            f"{self.endpoint.rstrip('/')}/segment",
-            json=payload,
-            timeout=180,
-        )
+    def _segment_http(self, study_id: str, prompt: Any, payload: dict[str, Any]) -> dict[str, Any]:
+        """Call HTTP MedSAM endpoint.
+
+        Supports two endpoint contracts:
+        1) JSON contract used by this backend (study_id + normalized ROI prompt).
+        2) Swin-LiteMedSAM contract (multipart file + x_min/y_min/x_max/y_max).
+        """
+        endpoint = f"{self.endpoint.rstrip('/')}/segment"
+
+        # First try the backend-native JSON contract.
+        try:
+            response = httpx.post(endpoint, json=payload, timeout=180)
+            response.raise_for_status()
+            parsed = response.json()
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            # Fallback to Swin-LiteMedSAM multipart contract.
+            pass
+
+        preview_path = self._study_image_path(study_id)
+        if not preview_path.is_file():
+            raise FileNotFoundError(f"Study image not found for MedSAM2 HTTP fallback: {preview_path}")
+
+        with Image.open(preview_path) as image:
+            width, height = image.size
+
+        x_min = float(prompt.x) * width
+        y_min = float(prompt.y) * height
+        x_max = float(prompt.x + prompt.width) * width
+        y_max = float(prompt.y + prompt.height) * height
+
+        image_bytes = preview_path.read_bytes()
+        files = {"file": (preview_path.name, BytesIO(image_bytes), "image/png")}
+        data = {
+            "x_min": str(x_min),
+            "y_min": str(y_min),
+            "x_max": str(x_max),
+            "y_max": str(y_max),
+        }
+        response = httpx.post(endpoint, files=files, data=data, timeout=300)
         response.raise_for_status()
-        return response.json()
+        seg_id = f"seg-{study_id}-{int(x_min)}-{int(y_min)}-{time_ns()}"
+        overlay_url, area_ratio = self._save_mask_overlay(
+            study_id=study_id,
+            segmentation_id=seg_id,
+            overlay_bytes=response.content,
+        )
+
+        # Swin-Lite endpoint returns image bytes, not structured JSON.
+        # Convert to the backend's expected segmentation response shape.
+        return {
+            "id": seg_id,
+            "label": "Swin-LiteMedSAM ROI",
+            "confidence": round(min(0.99, 0.55 + area_ratio * 1.7), 2),
+            "volumeMl": round(max(0.1, area_ratio * 1200), 1),
+            "source": "medsam2",
+            "overlayUrl": overlay_url,
+            "box": {
+                "x": prompt.x,
+                "y": prompt.y,
+                "width": prompt.width,
+                "height": prompt.height,
+            },
+        }
+
+    def _study_preview_path(self, study_id: str) -> Path:
+        backend_dir = Path(__file__).resolve().parent.parent
+        return backend_dir / "data" / "studies" / study_id / "preview.png"
+
+    def _study_dir(self, study_id: str) -> Path:
+        backend_dir = Path(__file__).resolve().parent.parent
+        return backend_dir / "data" / "studies" / study_id
+
+    def _save_mask_overlay(self, study_id: str, segmentation_id: str, overlay_bytes: bytes) -> tuple[str, float]:
+        """Persist a transparent mask overlay and return URL + mask area ratio."""
+        study_dir = self._study_dir(study_id)
+        overlays_dir = study_dir / "segmentations"
+        overlays_dir.mkdir(parents=True, exist_ok=True)
+
+        overlay = np.array(Image.open(BytesIO(overlay_bytes)).convert("RGB"))
+        # Detect green-tinted mask regions from Swin output.
+        mask = (overlay[:, :, 1] > overlay[:, :, 0] + 24) & (overlay[:, :, 1] > overlay[:, :, 2] + 24)
+        area_ratio = float(mask.mean()) if mask.size else 0.0
+
+        rgba = np.zeros((overlay.shape[0], overlay.shape[1], 4), dtype=np.uint8)
+        rgba[mask] = np.array([34, 211, 238, 165], dtype=np.uint8)
+
+        output_path = overlays_dir / f"{segmentation_id}.png"
+        Image.fromarray(rgba, mode="RGBA").save(output_path)
+        overlay_url = f"/data/studies/{study_id}/segmentations/{segmentation_id}.png"
+        return overlay_url, area_ratio
+
+    def _study_image_path(self, study_id: str) -> Path:
+        preview = self._study_preview_path(study_id)
+        if preview.is_file():
+            return preview
+
+        study_dir = self._study_dir(study_id)
+        candidates = sorted(study_dir.glob("*"))
+        for path in candidates:
+            if path.is_file() and path.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}:
+                return path
+        return preview
 
     def _segment_adapter(self, study_id: str, prompt: Any) -> dict[str, Any]:
         module = importlib.import_module(self.adapter_module or "")
