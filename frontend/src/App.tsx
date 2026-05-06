@@ -187,7 +187,7 @@ function App() {
 
     return {
       id: `LOCAL-${Date.now()}`,
-      patientName: "Uploaded Study",
+      patientName: file.name,
       patientDetail: "Local file",
       modality: isDicom ? "DICOM" : "IMG",
       bodyPart: "Unspecified",
@@ -409,7 +409,7 @@ function StudyPanel({ studies, activeStudyId, onFiles, onSelectStudy }: StudyPan
             {studies.map((study) => (
               <button
                 key={study.id}
-                className={`w-full rounded-md border p-3 text-left transition ${
+                className={`w-full rounded-md border px-2.5 py-2 text-left transition ${
                   activeStudyId === study.id
                     ? "border-cyan-300/45 bg-cyan-400/10 shadow-active-glow"
                     : "border-slate-800 bg-[#0c1420] hover:border-slate-600"
@@ -420,20 +420,13 @@ function StudyPanel({ studies, activeStudyId, onFiles, onSelectStudy }: StudyPan
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <p className="truncate text-sm font-semibold text-white">{study.patientName}</p>
-                    <p className="mt-1 truncate text-xs text-slate-500">{study.patientDetail}</p>
+                    <p className="mt-0.5 truncate text-[11px] text-slate-500">{study.modality} {study.bodyPart}</p>
                   </div>
                   <StatusDot decision={study.reviewDecision} />
                 </div>
-                <div className="mt-3 flex items-center justify-between gap-2 text-xs">
-                  <span className="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-300">
-                    {study.modality} {study.bodyPart}
-                  </span>
-                  <span className="text-slate-500">{study.timestamp}</span>
-                </div>
-                <div className="mt-3 border-t border-slate-800 pt-3 text-xs leading-5 text-slate-400">
-                  <p className="truncate">{study.series}</p>
-                  <p className="truncate">{study.slices} slice{study.slices === 1 ? "" : "s"}</p>
-                  <p className="truncate">{study.uploadedFileName ?? study.id}</p>
+                <div className="mt-2 flex items-center justify-between gap-2 text-[11px] text-slate-500">
+                  <span className="truncate">{study.uploadedFileName ?? study.id}</span>
+                  <span>{study.timestamp}</span>
                 </div>
               </button>
             ))}

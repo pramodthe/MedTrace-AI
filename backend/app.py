@@ -125,7 +125,7 @@ async def create_study(file: UploadFile = File(...)) -> dict:
 
     return {
         "id": study_id,
-        "patientName": metadata.get("patientName", "Uploaded Study"),
+        "patientName": metadata.get("patientName", filename if not is_dicom else "Uploaded Study"),
         "patientDetail": metadata.get("patientDetail", "DICOM metadata pending" if is_dicom else "Local image"),
         "modality": metadata.get("modality", "DICOM" if is_dicom else "IMG"),
         "bodyPart": metadata.get("bodyPart", "Unspecified"),
