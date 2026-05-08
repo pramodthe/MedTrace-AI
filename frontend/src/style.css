@@ -1,0 +1,460 @@
+/* Global App Styles */
+:root {
+  font-family: 'Outfit', 'Inter', system-ui, -apple-system, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  background-color: #f8fafc;
+  color: #1e293b;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* App Header styling */
+.app-header {
+  background: rgba(255, 255, 255, 0.8);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid rgba(226, 232, 240, 0.8);
+  padding: 1.25rem 2.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.logo-container {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.logo-icon {
+  background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+  color: white;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 0.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: bold;
+  font-size: 1.25rem;
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.2);
+}
+
+.app-title {
+  font-size: 1.25rem;
+  font-weight: 700;
+  background: linear-gradient(135deg, #1e293b 0%, #475569 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  margin: 0;
+}
+
+/* Editor Container */
+.editor-wrapper {
+  flex: 1;
+  max-width: 1000px;
+  width: 100%;
+  margin: 2rem auto;
+  background: white;
+  border-radius: 1rem;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.03);
+  border: 1px solid #e2e8f0;
+  min-height: calc(100vh - 12rem);
+  position: relative;
+  transition: all 0.3s ease;
+}
+
+.editor-wrapper:hover {
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.05);
+}
+
+/* Basic editor styles */
+.tiptap-container {
+  height: 100%;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.tiptap {
+  flex: 1;
+  overflow: auto;
+  outline: none;
+  padding: 2.5rem;
+  font-size: 1.1rem;
+  line-height: 1.7;
+}
+
+.tiptap :first-child {
+  margin-top: 0;
+}
+
+/* List styles */
+.tiptap ul,
+.tiptap ol {
+  padding: 0 1.5rem;
+  margin: 1.25rem 0;
+}
+
+.tiptap li {
+  margin-bottom: 0.5rem;
+}
+
+.tiptap ul li p,
+.tiptap ol li p {
+  margin-top: 0.25em;
+  margin-bottom: 0.25em;
+}
+
+/* Heading styles */
+.tiptap h1,
+.tiptap h2,
+.tiptap h3,
+.tiptap h4,
+.tiptap h5,
+.tiptap h6 {
+  line-height: 1.2;
+  margin-top: 2rem;
+  margin-bottom: 1rem;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.tiptap h1 {
+  font-size: 2.25rem;
+  border-bottom: 1px solid #e2e8f0;
+  padding-bottom: 0.5rem;
+}
+
+.tiptap h2 {
+  font-size: 1.75rem;
+}
+
+.tiptap h3 {
+  font-size: 1.4rem;
+}
+
+.tiptap h4,
+.tiptap h5,
+.tiptap h6 {
+  font-size: 1.1rem;
+}
+
+.tiptap p {
+  margin-bottom: 1.25rem;
+  color: #334155;
+}
+
+/* Code and preformatted text styles */
+.tiptap code {
+  background-color: #f1f5f9;
+  border-radius: 0.25rem;
+  color: #0f172a;
+  font-size: 0.9rem;
+  padding: 0.2em 0.4em;
+  font-family: 'Fira Code', 'Courier New', monospace;
+}
+
+.tiptap pre {
+  background: #0f172a;
+  border-radius: 0.5rem;
+  color: #f8fafc;
+  font-family: 'Fira Code', monospace;
+  margin: 1.5rem 0;
+  padding: 1rem 1.25rem;
+  overflow-x: auto;
+}
+
+.tiptap pre code {
+  background: none;
+  color: inherit;
+  font-size: 0.85rem;
+  padding: 0;
+}
+
+.tiptap blockquote {
+  border-left: 4px solid #3b82f6;
+  background: #f8fafc;
+  margin: 1.5rem 0;
+  padding: 0.75rem 1.25rem;
+  border-radius: 0 0.5rem 0.5rem 0;
+  color: #475569;
+  font-style: italic;
+}
+
+.tiptap hr {
+  border: none;
+  border-top: 1px solid #e2e8f0;
+  margin: 2rem 0;
+}
+
+/* Real-time Diff Highlight styles */
+.tiptap s {
+  background-color: rgba(239, 68, 68, 0.15);
+  text-decoration: line-through;
+  padding: 0.125rem 0.25rem;
+  border-radius: 0.25rem;
+  font-weight: 500;
+  color: #b91c1c;
+}
+
+.tiptap em {
+  background-color: rgba(34, 197, 94, 0.15);
+  padding: 0.125rem 0.25rem;
+  border-radius: 0.25rem;
+  font-weight: 500;
+  font-style: normal;
+  color: #15803d;
+}
+
+/* Floating suggestions pill styling */
+.suggestions-panel {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 1rem;
+  flex-wrap: wrap;
+}
+
+.suggestion-pill {
+  background: white;
+  border: 1px solid #e2e8f0;
+  padding: 0.5rem 1rem;
+  border-radius: 2rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: #475569;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.suggestion-pill:hover {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+  color: #1e293b;
+  transform: translateY(-1px);
+}
+
+.copilotKitWindow {
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+}
+
+/* Voice Widget Premium Styling */
+.voice-widget-container {
+  position: fixed;
+  bottom: 2rem;
+  right: 24rem; /* Spaced to avoid overlapping with the CopilotKit Sidebar */
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1rem;
+  pointer-events: none;
+}
+
+.voice-widget-container * {
+  pointer-events: auto;
+}
+
+.subtitles-overlay {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  align-items: flex-end;
+  max-width: 350px;
+}
+
+.subtitle-box {
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(226, 232, 240, 0.8);
+  padding: 0.75rem 1.25rem;
+  border-radius: 1rem;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
+  font-size: 0.925rem;
+  line-height: 1.5;
+  animation: slideInFade 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.user-sub {
+  color: #1e293b;
+  border-left: 3px solid #3b82f6;
+}
+
+.agent-sub {
+  color: #0f172a;
+  font-weight: 500;
+  border-left: 3px solid #10b981;
+}
+
+.error-sub {
+  color: #ef4444;
+  border-left: 3px solid #ef4444;
+}
+
+.voice-action-btn {
+  background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+  color: white;
+  width: 3.5rem;
+  height: 3.5rem;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  border: none;
+  box-shadow: 0 8px 24px rgba(37, 99, 235, 0.35);
+  position: relative;
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.voice-action-btn:hover {
+  transform: scale(1.08);
+  box-shadow: 0 12px 28px rgba(37, 99, 235, 0.45);
+}
+
+.voice-action-btn.active {
+  background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+  box-shadow: 0 8px 24px rgba(239, 68, 68, 0.35);
+  transform: scale(1.05);
+}
+
+.voice-action-btn.processing {
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  box-shadow: 0 8px 24px rgba(16, 185, 129, 0.35);
+}
+
+.btn-glow-ring {
+  position: absolute;
+  top: -4px;
+  left: -4px;
+  right: -4px;
+  bottom: -4px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  pointer-events: none;
+  transition: all 0.3s ease;
+}
+
+.voice-action-btn.active .btn-glow-ring {
+  border-color: rgba(239, 68, 68, 0.4);
+  animation: pulseGlow 1.5s infinite;
+}
+
+.mic-svg {
+  width: 1.5rem;
+  height: 1.5rem;
+}
+
+/* Audio Waveform CSS Animation */
+.waveform-waves {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.waveform-waves span {
+  display: block;
+  width: 3px;
+  height: 12px;
+  background-color: white;
+  border-radius: 2px;
+  animation: soundBounce 0.8s ease infinite alternate;
+}
+
+.waveform-waves span:nth-child(2) {
+  animation-delay: 0.15s;
+  height: 18px;
+}
+
+.waveform-waves span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+/* Loader Spinner */
+.voice-spinner {
+  width: 1.25rem;
+  height: 1.25rem;
+  border: 2px solid transparent;
+  border-top-color: white;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes slideInFade {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pulseGlow {
+  0% {
+    transform: scale(1);
+    opacity: 0.8;
+  }
+  50% {
+    transform: scale(1.15);
+    opacity: 0.4;
+  }
+  100% {
+    transform: scale(1.25);
+    opacity: 0;
+  }
+}
+
+@keyframes soundBounce {
+  from {
+    transform: scaleY(0.4);
+  }
+  to {
+    transform: scaleY(1.2);
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.voice-action-btn.speaking {
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  box-shadow: 0 8px 24px rgba(16, 185, 129, 0.35);
+}
+
+.speaking-wave {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.speaking-wave span {
+  display: block;
+  width: 3px;
+  height: 8px;
+  background-color: white;
+  border-radius: 2px;
+  animation: soundBounce 0.6s ease infinite alternate;
+}
+
+.speaking-wave span:nth-child(2) {
+  animation-delay: 0.1s;
+  height: 14px;
+}
+
+.speaking-wave span:nth-child(3) {
+  animation-delay: 0.2s;
+}

@@ -1,0 +1,31 @@
+# Node dependencies
+node_modules/
+dist/
+build/
+.next/
+
+# Python virtual environments and caches
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# System and editor files
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Subagent records
+*.webp
+*.png
+temp_voice_*.wav
