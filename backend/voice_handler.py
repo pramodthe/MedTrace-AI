@@ -23,33 +23,59 @@ class VoicePipeline:
 
     async def transcribe_audio(self, audio_bytes: bytes) -> str:
         """
-        Transcribes incoming audio bytes to text using OpenAI Whisper.
+        Transcribes incoming audio bytes and segments speakers (diarization) using Gemini 2.5 Flash.
         """
-        temp_filename = f"temp_voice_{uuid.uuid4().hex}.wav"
+        import base64
+        import httpx
+        
+        is_mp3 = (
+            audio_bytes.startswith(b"ID3") or 
+            audio_bytes.startswith(b"\xff\xfb") or 
+            audio_bytes.startswith(b"\xff\xf3") or 
+            audio_bytes.startswith(b"\xff\xf2")
+        )
+        mime_type = "audio/mp3" if is_mp3 else "audio/wav"
+        
+        gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+        if not gemini_key:
+            raise ValueError("GEMINI_API_KEY or GOOGLE_API_KEY is not configured in the environment.")
+            
         try:
-            with open(temp_filename, "wb") as f:
-                f.write(audio_bytes)
+            base64_data = base64.b64encode(audio_bytes).decode("utf-8")
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={gemini_key}"
+            
+            payload = {
+                "contents": [{
+                    "parts": [
+                        {
+                            "inlineData": {
+                                "mimeType": mime_type,
+                                "data": base64_data
+                            }
+                        },
+                        {
+                            "text": (
+                                "You are an expert medical transcriptionist. Transcribe the provided audio between a clinician and a patient. "
+                                "Segment the conversation accurately into alternating speaker turns, labelling each line clearly as either "
+                                "'Clinician: [speech]' or 'Patient: [speech]' based on who is speaking (speaker diarization). "
+                                "Do not add any other commentary, introductions, or summaries. Return only the diarized transcription."
+                            )
+                        }
+                    ]
+                }]
+            }
+            
+            async with httpx.AsyncClient() as client:
+                response = await client.post(url, json=payload, timeout=60.0)
+                response.raise_for_status()
+                result = response.json()
                 
-            # Attempt transcription with default client
-            try:
-                with open(temp_filename, "rb") as audio_file:
-                    transcription = self.client.audio.transcriptions.create(
-                        model="whisper-1",
-                        file=audio_file
-                    )
-                return transcription.text
-            except Exception as e:
-                # If custom base URL fails (e.g. model routing doesn't support audio), fall back to standard OpenAI
-                print(f"[STT] Custom endpoint failed, trying fallback: {e}")
-                with open(temp_filename, "rb") as audio_file:
-                    transcription = self.fallback_client.audio.transcriptions.create(
-                        model="whisper-1",
-                        file=audio_file
-                    )
-                return transcription.text
-        finally:
-            if os.path.exists(temp_filename):
-                os.remove(temp_filename)
+                transcript = result["candidates"][0]["content"]["parts"][0]["text"]
+                print(f"[STT] Gemini Transcription successful:\n{transcript}")
+                return transcript
+        except Exception as e:
+            print(f"[STT] Gemini Transcription failed: {e}")
+            raise e
 
     async def generate_speech(self, text: str) -> bytes:
         """
@@ -65,13 +91,17 @@ class VoicePipeline:
             return response.content
         except Exception as e:
             print(f"[TTS] Custom endpoint failed, trying fallback: {e}")
-            response = self.fallback_client.audio.speech.create(
-                model="tts-1",
-                voice="alloy",
-                input=text,
-                response_format="mp3"
-            )
-            return response.content
+            try:
+                response = self.fallback_client.audio.speech.create(
+                    model="tts-1",
+                    voice="alloy",
+                    input=text,
+                    response_format="mp3"
+                )
+                return response.content
+            except Exception as fallback_err:
+                print(f"[TTS] Fallback failed too: {fallback_err}. Returning empty speech content.")
+                return b""
 
     async def run_agent_pipeline(self, text: str, document: str = None, thread_id: str = "voice_session") -> dict:
         """
