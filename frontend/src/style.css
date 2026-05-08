@@ -247,180 +247,344 @@ body {
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
 }
 
-/* Voice Widget Premium Styling */
-.voice-widget-container {
-  position: fixed;
-  bottom: 2rem;
-  right: 24rem; /* Spaced to avoid overlapping with the CopilotKit Sidebar */
-  z-index: 9999;
+/* ==========================================================================
+   Stitch 3-Column Dashboard Styling
+   ========================================================================== */
+
+.stitch-dashboard-container {
+  display: flex;
+  flex-direction: row;
+  gap: 1.5rem;
+  padding: 1.5rem;
+  width: 100%;
+  box-sizing: border-box;
+  flex: 1;
+  min-height: calc(100vh - 5.5rem);
+}
+
+/* Column 1: Audio Sessions Database */
+.stitch-sidebar {
+  width: 300px;
+  background: #0f172a; /* Premium Dark Background */
+  border-radius: 1rem;
+  padding: 1.25rem;
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
-  gap: 1rem;
-  pointer-events: none;
+  border: 1px solid rgba(255, 255, 255, 0.05);
 }
 
-.voice-widget-container * {
-  pointer-events: auto;
+.sidebar-title {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #f8fafc;
+  margin: 0 0 0.5rem 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
 }
 
-.subtitles-overlay {
+.sidebar-desc {
+  font-size: 0.8rem;
+  color: #94a3b8;
+  margin: 0 0 1.25rem 0;
+}
+
+.sessions-list {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
-  align-items: flex-end;
-  max-width: 350px;
+  overflow-y: auto;
+  flex: 1;
+  max-height: calc(100vh - 14rem);
 }
 
-.subtitle-box {
-  background: rgba(255, 255, 255, 0.85);
-  backdrop-filter: blur(16px);
-  border: 1px solid rgba(226, 232, 240, 0.8);
-  padding: 0.75rem 1.25rem;
-  border-radius: 1rem;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
-  font-size: 0.925rem;
-  line-height: 1.5;
-  animation: slideInFade 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+.sessions-empty {
+  font-size: 0.85rem;
+  color: #64748b;
+  text-align: center;
+  padding: 2rem 1rem;
+  border: 1px dashed rgba(255, 255, 255, 0.1);
+  border-radius: 0.75rem;
 }
 
-.user-sub {
-  color: #1e293b;
-  border-left: 3px solid #3b82f6;
+.session-card {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 0.75rem;
+  padding: 1rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
 }
 
-.agent-sub {
-  color: #0f172a;
+.session-card:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.session-card.active {
+  background: rgba(59, 130, 246, 0.1);
+  border-color: rgba(59, 130, 246, 0.4);
+}
+
+.session-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.session-date {
+  font-size: 0.75rem;
+  color: #94a3b8;
   font-weight: 500;
-  border-left: 3px solid #10b981;
 }
 
-.error-sub {
-  color: #ef4444;
-  border-left: 3px solid #ef4444;
+.session-duration {
+  font-size: 0.7rem;
+  background: rgba(255, 255, 255, 0.1);
+  color: #cbd5e1;
+  padding: 0.15rem 0.4rem;
+  border-radius: 1rem;
+  font-weight: 600;
 }
 
-.voice-action-btn {
-  background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+.session-transcript {
+  font-size: 0.825rem;
+  color: #cbd5e1;
+  margin: 0;
+  line-height: 1.4;
+  font-style: italic;
+}
+
+.session-card-footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 0.25rem;
+}
+
+.playback-btn {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #f1f5f9;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.35rem 0.75rem;
+  border-radius: 0.5rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.playback-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.playback-btn.playing {
+  background: #ef4444;
+  border-color: #ef4444;
   color: white;
-  width: 3.5rem;
-  height: 3.5rem;
-  border-radius: 50%;
+  animation: pulseGlow 1s infinite alternate;
+}
+
+/* Column 2: Editor Canvas Area */
+.stitch-editor-area {
+  flex: 1;
+  background: white;
+  border-radius: 1rem;
+  border: 1px solid #e2e8f0;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.02);
+  overflow: hidden;
+}
+
+.editor-area-title {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #0f172a;
+  padding: 1.25rem 2rem 0 2rem;
+  margin: 0;
+}
+
+.stitch-editor-area .editor-wrapper {
+  margin: 0;
+  border: none;
+  box-shadow: none;
+  width: 100%;
+}
+
+/* Column 3: Voice Recorder Hub Area */
+.stitch-recorder-area {
+  width: 320px;
+}
+
+.stitch-recorder-card {
+  background: #0f172a; /* Dark premium background matching sidebar */
+  border-radius: 1rem;
+  padding: 1.5rem;
+  box-sizing: border-box;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.recorder-title {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #f8fafc;
+  margin: 0;
+}
+
+.recorder-desc {
+  font-size: 0.8rem;
+  color: #94a3b8;
+  margin: 0;
+  line-height: 1.5;
+}
+
+/* Wave visualizer container */
+.visualizer-container {
+  height: 120px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 0.75rem;
   display: flex;
   align-items: center;
   justify-content: center;
-  cursor: pointer;
-  border: none;
-  box-shadow: 0 8px 24px rgba(37, 99, 235, 0.35);
+  overflow: hidden;
   position: relative;
-  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-.voice-action-btn:hover {
-  transform: scale(1.08);
-  box-shadow: 0 12px 28px rgba(37, 99, 235, 0.45);
+.visualizer-container.active {
+  background: rgba(59, 130, 246, 0.05);
+  border-color: rgba(59, 130, 246, 0.2);
 }
 
-.voice-action-btn.active {
-  background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
-  box-shadow: 0 8px 24px rgba(239, 68, 68, 0.35);
-  transform: scale(1.05);
+.visualizer-canvas {
+  width: 100%;
+  height: 100%;
 }
 
-.voice-action-btn.processing {
-  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
-  box-shadow: 0 8px 24px rgba(16, 185, 129, 0.35);
+.visualizer-placeholder {
+  font-size: 0.825rem;
+  color: #64748b;
+  font-weight: 500;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
 }
 
-.btn-glow-ring {
-  position: absolute;
-  top: -4px;
-  left: -4px;
-  right: -4px;
-  bottom: -4px;
-  border-radius: 50%;
-  border: 2px solid transparent;
-  pointer-events: none;
-  transition: all 0.3s ease;
+.visualizer-placeholder::before {
+  content: "⏸";
+  font-size: 1.25rem;
 }
 
-.voice-action-btn.active .btn-glow-ring {
-  border-color: rgba(239, 68, 68, 0.4);
-  animation: pulseGlow 1.5s infinite;
+.recorder-error {
+  font-size: 0.8rem;
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.1);
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgba(239, 68, 68, 0.2);
 }
 
-.mic-svg {
-  width: 1.5rem;
-  height: 1.5rem;
+.recorder-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 0.5rem;
 }
 
-/* Audio Waveform CSS Animation */
-.waveform-waves {
+.timer-badge {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.1);
+  padding: 0.25rem 0.6rem;
+  border-radius: 0.5rem;
+  animation: pulseInterval 1s infinite alternate;
+}
+
+.record-btn {
   display: flex;
   align-items: center;
-  gap: 3px;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  font-weight: 700;
+  padding: 0.6rem 1.25rem;
+  border-radius: 0.75rem;
+  cursor: pointer;
+  border: none;
+  transition: all 0.2s ease;
+  margin-left: auto;
 }
 
-.waveform-waves span {
-  display: block;
-  width: 3px;
-  height: 12px;
-  background-color: white;
-  border-radius: 2px;
-  animation: soundBounce 0.8s ease infinite alternate;
+.record-btn.start {
+  background: #3b82f6;
+  color: white;
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
 }
 
-.waveform-waves span:nth-child(2) {
-  animation-delay: 0.15s;
-  height: 18px;
+.record-btn.start:hover {
+  background: #2563eb;
+  transform: translateY(-1px);
 }
 
-.waveform-waves span:nth-child(3) {
-  animation-delay: 0.3s;
+.record-btn.stop {
+  background: #ef4444;
+  color: white;
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
 }
 
-/* Loader Spinner */
-.voice-spinner {
-  width: 1.25rem;
-  height: 1.25rem;
+.record-btn.stop:hover {
+  background: #dc2626;
+  transform: translateY(-1px);
+}
+
+.record-btn.uploading {
+  background: rgba(255, 255, 255, 0.1);
+  color: #94a3b8;
+  cursor: not-allowed;
+}
+
+.recorder-spinner {
+  width: 1rem;
+  height: 1rem;
   border: 2px solid transparent;
-  border-top-color: white;
+  border-top-color: #94a3b8;
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
 
-@keyframes slideInFade {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+/* Icons */
+.mic-icon::before {
+  content: "🎙️";
+}
+
+.stop-icon::before {
+  content: "⏹";
 }
 
 @keyframes pulseGlow {
-  0% {
-    transform: scale(1);
-    opacity: 0.8;
+  from {
+    box-shadow: 0 0 4px rgba(239, 68, 68, 0.4);
   }
-  50% {
-    transform: scale(1.15);
-    opacity: 0.4;
-  }
-  100% {
-    transform: scale(1.25);
-    opacity: 0;
+  to {
+    box-shadow: 0 0 16px rgba(239, 68, 68, 0.8);
   }
 }
 
-@keyframes soundBounce {
+@keyframes pulseInterval {
   from {
-    transform: scaleY(0.4);
+    opacity: 0.6;
   }
   to {
-    transform: scaleY(1.2);
+    opacity: 1;
   }
 }
 
@@ -430,31 +594,3 @@ body {
   }
 }
 
-.voice-action-btn.speaking {
-  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
-  box-shadow: 0 8px 24px rgba(16, 185, 129, 0.35);
-}
-
-.speaking-wave {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-}
-
-.speaking-wave span {
-  display: block;
-  width: 3px;
-  height: 8px;
-  background-color: white;
-  border-radius: 2px;
-  animation: soundBounce 0.6s ease infinite alternate;
-}
-
-.speaking-wave span:nth-child(2) {
-  animation-delay: 0.1s;
-  height: 14px;
-}
-
-.speaking-wave span:nth-child(3) {
-  animation-delay: 0.2s;
-}

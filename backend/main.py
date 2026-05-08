@@ -7,6 +7,9 @@ from copilotkit import LangGraphAGUIAgent
 from ag_ui_langgraph import add_langgraph_fastapi_endpoint
 from agent import graph
 from voice_handler import VoicePipeline
+from database import save_session, get_all_sessions
+from datetime import datetime
+import uuid
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -31,6 +34,64 @@ add_langgraph_fastapi_endpoint(
     ),
     path="/",
 )
+
+class SaveSessionRequest(BaseModel):
+    audio_base64: str
+    duration: str
+
+@app.get("/api/sessions")
+async def get_sessions_endpoint():
+    """
+    Fetch all saved voice sessions from SQLite.
+    """
+    return get_all_sessions()
+
+@app.post("/api/sessions")
+async def save_session_endpoint(request: SaveSessionRequest):
+    """
+    Transcribes binary WAV audio, generates a report using LangGraph, saves to SQLite, and returns the session.
+    """
+    try:
+        # Decode base64 audio
+        audio_data = base64.b64decode(request.audio_base64.split(",")[-1])
+        
+        # Transcribe using Whisper
+        pipeline = VoicePipeline()
+        transcript = await pipeline.transcribe_audio(audio_data)
+        
+        if not transcript or len(transcript.strip()) < 2:
+            transcript = "Could not transcribe audio clearly."
+        
+        # Generate report using co-editor LangGraph agent
+        agent_result = await pipeline.run_agent_pipeline(
+            text=f"Please write a structured report based on this transcribed input: {transcript}",
+            document=""
+        )
+        
+        session_id = str(uuid.uuid4())
+        timestamp = datetime.now().isoformat()
+        
+        # Persist to SQLite
+        save_session(
+            session_id=session_id,
+            timestamp=timestamp,
+            duration=request.duration,
+            transcript=transcript,
+            report=agent_result["document"],
+            audio_base64=request.audio_base64
+        )
+        
+        return {
+            "id": session_id,
+            "timestamp": timestamp,
+            "duration": request.duration,
+            "transcript": transcript,
+            "report": agent_result["document"],
+            "audio_base64": request.audio_base64
+        }
+    except Exception as e:
+        print(f"Error saving session: {e}")
+        return {"error": str(e)}
 
 class VoiceChatRequest(BaseModel):
     text: str

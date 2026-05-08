@@ -29,3 +29,4 @@ __pycache__/
 *.webp
 *.png
 temp_voice_*.wav
+*.db

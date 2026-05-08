@@ -62,9 +62,7 @@ export default function App() {
 
 interface AgentState {
   document: string;
-}
-
-const DocumentEditor = () => {
+}const DocumentEditor = () => {
   const editor = useEditor({
     extensions,
     immediatelyRender: false,
@@ -76,7 +74,58 @@ const DocumentEditor = () => {
   const [placeholderVisible, setPlaceholderVisible] = useState(false);
   const [currentDocument, setCurrentDocument] = useState("");
 
-  // Set up suggestions for the user
+  const [sessions, setSessions] = useState<any[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [playingSessionId, setPlayingSessionId] = useState<string | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  // Fetch all saved sessions on mount
+  useEffect(() => {
+    fetch("http://localhost:8000/api/sessions")
+      .then((res) => res.json())
+      .then((data) => {
+        if (Array.isArray(data)) {
+          setSessions(data);
+          if (data.length > 0) {
+            loadSession(data[0]);
+          }
+        }
+      })
+      .catch((err) => console.error("Error fetching sessions:", err));
+  }, []);
+
+  const loadSession = (session: any) => {
+    setActiveSessionId(session.id);
+    const htmlContent = fromMarkdown(session.report);
+    editor?.commands.setContent(htmlContent);
+    setCurrentDocument(session.report);
+    setAgentState({ document: session.report });
+  };
+
+  const handleSessionCreated = (newSession: any) => {
+    setSessions((prev) => [newSession, ...prev]);
+    loadSession(newSession);
+  };
+
+  const playAudio = (session: any) => {
+    if (playingSessionId === session.id) {
+      audioRef.current?.pause();
+      setPlayingSessionId(null);
+    } else {
+      if (audioRef.current) {
+        audioRef.current.pause();
+      }
+      const audio = new Audio(session.audio_base64);
+      audioRef.current = audio;
+      setPlayingSessionId(session.id);
+      audio.play();
+      audio.onended = () => {
+        setPlayingSessionId(null);
+      };
+    }
+  };
+
+  // Setup suggestions for the user
   useConfigureSuggestions({
     suggestions: [
       {
@@ -214,21 +263,71 @@ const DocumentEditor = () => {
   );
 
   return (
-    <div className="editor-wrapper">
-      {placeholderVisible && (
-        <div className="absolute top-10 left-10 pointer-events-none text-gray-400 font-medium">
-          Write whatever you want here in Markdown format or ask the AI...
+    <div className="stitch-dashboard-container">
+      {/* COLUMN 1: Audio Sessions Database */}
+      <div className="stitch-sidebar">
+        <h3 className="sidebar-title">📁 Audio Database</h3>
+        <p className="sidebar-desc">Select a session to load its generated report or listen to playback.</p>
+        <div className="sessions-list">
+          {sessions.length === 0 ? (
+            <div className="sessions-empty">No saved sessions yet. Record one to get started!</div>
+          ) : (
+            sessions.map((session) => (
+              <div
+                key={session.id}
+                className={`session-card ${activeSessionId === session.id ? "active" : ""}`}
+                onClick={() => loadSession(session)}
+              >
+                <div className="session-card-header">
+                  <span className="session-date">
+                    {new Date(session.timestamp).toLocaleDateString()}
+                  </span>
+                  <span className="session-duration">{session.duration}</span>
+                </div>
+                <div className="session-card-body">
+                  <p className="session-transcript">"{session.transcript.slice(0, 75)}..."</p>
+                </div>
+                <div className="session-card-footer">
+                  <button
+                    className={`playback-btn ${playingSessionId === session.id ? "playing" : ""}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      playAudio(session);
+                    }}
+                  >
+                    {playingSessionId === session.id ? "⏹ Stop Playback" : "▶ Play Voice"}
+                  </button>
+                </div>
+              </div>
+            ))
+          )}
         </div>
-      )}
-      <div className="tiptap-container">
-        <EditorContent editor={editor} />
       </div>
-      <VoiceAgentWidget
-        editor={editor}
-        currentDocument={currentDocument}
-        setAgentState={setAgentState}
-        setCurrentDocument={setCurrentDocument}
-      />
+
+      {/* COLUMN 2: Generated Document Report */}
+      <div className="stitch-editor-area">
+        <h3 className="editor-area-title">📝 Generated Report</h3>
+        <div className="editor-wrapper relative">
+          {placeholderVisible && (
+            <div className="absolute top-12 left-10 pointer-events-none text-gray-400 font-medium z-10">
+              Write whatever you want here in Markdown format or ask the AI...
+            </div>
+          )}
+          <div className="tiptap-container">
+            <EditorContent editor={editor} />
+          </div>
+        </div>
+      </div>
+
+      {/* COLUMN 3: Voice Recorder Hub */}
+      <div className="stitch-recorder-area">
+        <VoiceAgentWidget
+          editor={editor}
+          setCurrentDocument={setCurrentDocument}
+          setAgentState={setAgentState}
+          onSessionCreated={handleSessionCreated}
+        />
+      </div>
     </div>
   );
 };
