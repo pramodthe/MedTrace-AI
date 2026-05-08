@@ -225,6 +225,7 @@ const DocumentEditor = () => {
       </div>
       <VoiceAgentWidget
         editor={editor}
+        currentDocument={currentDocument}
         setAgentState={setAgentState}
         setCurrentDocument={setCurrentDocument}
       />

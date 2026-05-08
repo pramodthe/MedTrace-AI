@@ -34,6 +34,8 @@ add_langgraph_fastapi_endpoint(
 
 class VoiceChatRequest(BaseModel):
     text: str
+    document: str | None = None
+    thread_id: str | None = "voice_session"
 
 @app.post("/api/voice-chat")
 async def voice_chat_endpoint(request: VoiceChatRequest):
@@ -41,7 +43,11 @@ async def voice_chat_endpoint(request: VoiceChatRequest):
     HTTP POST endpoint for text-based voice agent requests.
     """
     pipeline = VoicePipeline()
-    agent_result = await pipeline.run_agent_pipeline(request.text)
+    agent_result = await pipeline.run_agent_pipeline(
+        text=request.text,
+        document=request.document,
+        thread_id=request.thread_id
+    )
     return {
         "verbal_response": agent_result["verbal_response"],
         "document": agent_result["document"]

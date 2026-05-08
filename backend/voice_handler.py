@@ -73,7 +73,7 @@ class VoicePipeline:
             )
             return response.content
 
-    async def run_agent_pipeline(self, text: str, thread_id: str = "voice_session") -> dict:
+    async def run_agent_pipeline(self, text: str, document: str = None, thread_id: str = "voice_session") -> dict:
         """
         Passes user input through the compiled co-editor LangGraph graph and returns the verbal response and document updates.
         """
@@ -83,7 +83,10 @@ class VoicePipeline:
         # Load current state from the graph checkpointer
         state = await graph.aget_state(config)
         messages = list(state.values.get("messages", [])) if state.values else []
-        document = state.values.get("document", "") if state.values else ""
+        
+        # Prioritize live document text from frontend editor
+        if document is None:
+            document = state.values.get("document", "") if state.values else ""
         
         # Append new user message
         from langchain_core.messages import HumanMessage

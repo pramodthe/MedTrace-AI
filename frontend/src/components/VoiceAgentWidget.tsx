@@ -3,6 +3,7 @@ import MarkdownIt from "markdown-it";
 
 interface VoiceAgentWidgetProps {
   editor: any;
+  currentDocument: string;
   setAgentState: (s: any) => void;
   setCurrentDocument: (s: string) => void;
 }
@@ -14,6 +15,7 @@ const md = new MarkdownIt({
 
 export const VoiceAgentWidget: React.FC<VoiceAgentWidgetProps> = ({
   editor,
+  currentDocument,
   setAgentState,
   setCurrentDocument,
 }) => {
@@ -28,6 +30,7 @@ export const VoiceAgentWidget: React.FC<VoiceAgentWidgetProps> = ({
   const recognitionRef = useRef<any>(null);
   const isSpeakingRef = useRef(false);
   const isActiveRef = useRef(false);
+  const threadIdRef = useRef<string>("voice_session");
 
   // Keep refs synchronized to avoid closure stale state issues in callback events
   useEffect(() => {
@@ -104,7 +107,11 @@ export const VoiceAgentWidget: React.FC<VoiceAgentWidgetProps> = ({
       const response = await fetch("http://localhost:8000/api/voice-chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: query }),
+        body: JSON.stringify({
+          text: query,
+          document: currentDocument,
+          thread_id: threadIdRef.current,
+        }),
       });
 
       if (!response.ok) {
@@ -205,6 +212,9 @@ export const VoiceAgentWidget: React.FC<VoiceAgentWidgetProps> = ({
       setIsActive(true);
       setUserSubtitle("");
       setAgentSubtitle("Initialising hands-free voice mode...");
+      
+      // Generate unique session-isolated thread ID to prevent state pollution
+      threadIdRef.current = "voice_" + Math.random().toString(36).substring(2, 15);
       
       // Welcome message to greet the user
       const greeting = "Hi! I am your AI co-editor. What would you like to write or modify today?";
