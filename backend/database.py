@@ -58,5 +58,20 @@ def get_all_sessions():
     conn.close()
     return sessions
 
+def update_session_report(session_id: str, report: str) -> bool:
+    """
+    Updates the report column for an existing session. Returns True if a row was updated.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE sessions SET report = ? WHERE id = ?",
+        (report, session_id),
+    )
+    conn.commit()
+    updated = cursor.rowcount > 0
+    conn.close()
+    return updated
+
 # Auto-initialize database on import
 init_db()

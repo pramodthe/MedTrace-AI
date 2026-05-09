@@ -1,17 +1,19 @@
 import base64
 import os
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from fastapi.middleware.cors import CORSMiddleware
 from copilotkit import LangGraphAGUIAgent
 from ag_ui_langgraph import add_langgraph_fastapi_endpoint
 from agent import graph
 from voice_handler import VoicePipeline
-from database import save_session, get_all_sessions
+from database import save_session, get_all_sessions, update_session_report
 from datetime import datetime
 import uuid
 from dotenv import load_dotenv
 load_dotenv()
+
+DATA_REPORTS_DIR = os.path.join(os.path.dirname(__file__), "data", "reports")
 
 app = FastAPI(title="Predictive State Updates Agent Backend")
 
@@ -93,10 +95,73 @@ async def save_session_endpoint(request: SaveSessionRequest):
         print(f"Error saving session: {e}")
         return {"error": str(e)}
 
+class GenerateReportRequest(BaseModel):
+    session_id: str
+    transcript: str = ""
+    current_report_text: str = ""
+    regenerate: bool = Field(
+        default=True,
+        description="If True and transcript is non-empty, runs the agent to draft/refine before saving.",
+    )
+
+
 class VoiceChatRequest(BaseModel):
     text: str
     document: str | None = None
     thread_id: str | None = "voice_session"
+
+@app.post("/api/sessions/generate-report")
+async def generate_report_endpoint(request: GenerateReportRequest):
+    """
+    Optionally regenerates the clinical report from the transcript via LangGraph, then writes plain text
+    to data/reports/ and updates the session row in SQLite when the session id exists.
+    """
+    try:
+        report_body = request.current_report_text or ""
+        did_regenerate = False
+
+        if (
+            request.regenerate
+            and request.transcript.strip()
+        ):
+            pipeline = VoicePipeline()
+            thread_id = f"export_{request.session_id}_{uuid.uuid4().hex[:12]}"
+            agent_result = await pipeline.run_agent_pipeline(
+                text=(
+                    "Please write a structured clinical report in markdown based on this consultation "
+                    "transcript. Use the current document as a starting draft when it is non-empty; "
+                    "expand or correct it from the transcript as needed.\n\n---\n\n"
+                    f"{request.transcript}"
+                ),
+                document=request.current_report_text or "",
+                thread_id=thread_id,
+            )
+            report_body = agent_result.get("document") or report_body
+            did_regenerate = True
+
+        os.makedirs(DATA_REPORTS_DIR, exist_ok=True)
+        safe_id = "".join(c for c in request.session_id if c.isalnum() or c in "-_")[:96]
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{safe_id}_{ts}.txt"
+        filepath = os.path.join(DATA_REPORTS_DIR, filename)
+
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(report_body)
+
+        db_ok = update_session_report(request.session_id, report_body)
+
+        return {
+            "ok": True,
+            "filename": filename,
+            "relative_path": f"data/reports/{filename}",
+            "report": report_body,
+            "database_updated": db_ok,
+            "regenerated": did_regenerate,
+        }
+    except Exception as e:
+        print(f"Error generate-report: {e}")
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
 
 @app.post("/api/voice-chat")
 async def voice_chat_endpoint(request: VoiceChatRequest):

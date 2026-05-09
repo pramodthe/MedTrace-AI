@@ -18,6 +18,10 @@ __pycache__/
 .env.local
 .env.*.local
 
+# Claude Code and agent skills (local only)
+.claude/
+.agents/
+
 # System and editor files
 .DS_Store
 .vscode/
@@ -30,3 +34,6 @@ __pycache__/
 *.png
 temp_voice_*.wav
 *.db
+
+# Exported reports (may contain PHI)
+backend/data/

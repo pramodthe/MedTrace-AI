@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, useRef } from "react";
+import { Link, Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import { CopilotKit } from "@copilotkit/react-core";
 import {
   CopilotChatConfigurationProvider,
@@ -19,23 +20,34 @@ import "./style.css";
 const extensions = [StarterKit];
 
 const defaultSession = {
-  id: "preloaded-knee-consultation",
+  id: "local-draft-session",
   timestamp: new Date().toISOString(),
-  duration: "03:45",
+  duration: "0:00",
   transcript: "",
-  report: `## Reason for visit
-Hard lump behind the knee.
-
-## History of present illness (HPI)
-- The patient is seen today for a medical concern involving a hard **lump** behind the knee. They are not sure what caused it, but noticed it a few days ago.
-- Can feel the lump when they flex their leg.
-- Noticed after a recent soccer practice.`,
-  audio_base64: ""
+  report: "",
+  audio_base64: "",
 };
 
-export default function App() {
+function HomePage() {
   return (
-    // useSingleEndpoint defaults true in <CopilotKit/>; multi-route Express needs REST (GET …/info).
+    <div className="clinical-app-layout clinical-home-layout">
+      <main className="clinical-main-content clinical-home-main">
+        <div className="clinical-home-card">
+          <h1 className="clinical-home-title">Clinical Cortex</h1>
+          <p className="clinical-home-subtitle">MedTrace AI — documentation and agent-assisted workflows.</p>
+          <Link to="/transcription" className="stitch-action-pill start-rec clinical-home-cta">
+            Open transcription
+          </Link>
+        </div>
+      </main>
+    </div>
+  );
+}
+
+function TranscriptionPage() {
+  const navigate = useNavigate();
+
+  return (
     <CopilotKit
       runtimeUrl="/api/copilotkit"
       useSingleEndpoint={false}
@@ -43,24 +55,35 @@ export default function App() {
       agent="predictive_state_updates"
     >
       <CopilotChatConfigurationProvider agentId="predictive_state_updates">
-      <div className="clinical-app-layout">
-        <header className="app-header">
-          <div className="logo-container">
-            <div className="logo-icon">🩺</div>
-            <h1 className="app-title">Clinical Cortex <span style={{ fontWeight: 400, color: "var(--stitch-secondary)" }}>— MedTrace AI</span></h1>
-          </div>
-          <div className="flex items-center gap-4">
-            <span className="text-xs font-semibold bg-emerald-50 text-emerald-600 px-3 py-1.5 rounded-full border border-emerald-100 flex items-center gap-1.5">
-              <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-ping"></span> Live Handshake Active
-            </span>
-          </div>
-        </header>
-        <main className="clinical-main-content">
-          <DocumentEditor />
-        </main>
-      </div>
+        <div className="clinical-app-layout">
+          <header className="app-header app-header--transcription">
+            <div className="app-header-lead">
+              <button
+                type="button"
+                className="stitch-action-pill outline app-header-back-btn"
+                onClick={() => navigate("/")}
+                aria-label="Back to home"
+              >
+                ← Back
+              </button>
+            </div>
+          </header>
+          <main className="clinical-main-content">
+            <DocumentEditor />
+          </main>
+        </div>
       </CopilotChatConfigurationProvider>
     </CopilotKit>
+  );
+}
+
+export default function App() {
+  return (
+    <Routes>
+      <Route path="/" element={<HomePage />} />
+      <Route path="/transcription" element={<TranscriptionPage />} />
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
   );
 }
 
@@ -259,7 +282,7 @@ const DocumentEditor = () => {
 
   const [currentDocument, setCurrentDocument] = useState("");
   const [sessions, setSessions] = useState<any[]>([]);
-  const [activeSessionId, setActiveSessionId] = useState<string | null>("preloaded-knee-consultation");
+  const [activeSessionId, setActiveSessionId] = useState<string | null>("local-draft-session");
   const [playingSessionId, setPlayingSessionId] = useState<string | null>(null);
   const [commandText, setCommandText] = useState("");
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -274,6 +297,10 @@ const DocumentEditor = () => {
   const [recordingTime, setRecordingTime] = useState(0);
   const [errorMsg, setErrorMsg] = useState("");
   const [aiBubbleDismissed, setAiBubbleDismissed] = useState(false);
+  const [isGeneratingReport, setIsGeneratingReport] = useState(false);
+  const [reportActionMsg, setReportActionMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(
+    null
+  );
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -442,10 +469,54 @@ const DocumentEditor = () => {
 
   const handleSessionCreated = (newSession: any) => {
     setSessions((prev) => {
-      const filtered = prev.filter(s => s.id !== "preloaded-knee-consultation");
+      const filtered = prev.filter((s) => s.id !== "local-draft-session");
       return [newSession, ...filtered];
     });
     loadSession(newSession);
+  };
+
+  const handleGenerateReport = async () => {
+    if (!editor || isGeneratingReport || isLoading) return;
+    const currentText = editor.getText() || currentDocument || "";
+    if (!currentText.trim()) return;
+    const session = sessions.find((s) => s.id === activeSessionId) || defaultSession;
+    setIsGeneratingReport(true);
+    setReportActionMsg(null);
+    try {
+      const response = await fetch("http://localhost:8000/api/sessions/generate-report", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          session_id: session.id,
+          transcript: session.transcript || "",
+          current_report_text: currentText,
+          regenerate: true,
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(typeof data.detail === "string" ? data.detail : "Failed to generate report");
+      }
+      const reportText = typeof data.report === "string" ? data.report : currentText;
+      editor.commands.setContent(fromMarkdown(reportText));
+      setCurrentDocument(reportText);
+      setAgentState({ document: reportText });
+      setSessions((prev) =>
+        prev.map((s) => (s.id === session.id ? { ...s, report: reportText } : s))
+      );
+      const savedPart = data.database_updated ? "Saved to database and " : "";
+      const filePart = data.filename ? `file ${data.filename}` : "data folder";
+      const regenPart = data.regenerated ? "Report generated from transcript. " : "Report exported. ";
+      setReportActionMsg({
+        kind: "ok",
+        text: `${regenPart}${savedPart}stored under backend/data/reports/ (${filePart}).`,
+      });
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Request failed";
+      setReportActionMsg({ kind: "err", text: msg });
+    } finally {
+      setIsGeneratingReport(false);
+    }
   };
 
   const playAudio = (session: any) => {
@@ -567,6 +638,7 @@ const DocumentEditor = () => {
   }, [agentState?.document, isLoading, currentDocument, editor]);
 
   const text = editor?.getText() || "";
+  const canvasHasContent = text.trim().length > 0;
 
   const currentDocumentRef = useRef(currentDocument);
   const agentStateRef = useRef(agentState);
@@ -854,11 +926,28 @@ const DocumentEditor = () => {
         <div className="stitch-insights-panel">
           <div className="panel-header-row">
             <h3 className="panel-section-title">AI Insights</h3>
-            <div className="insights-toggle-pills">
-              <span className="insight-pill active">Summarizations</span>
-              <span className="insight-pill">Analysis</span>
-            </div>
+            <button
+              type="button"
+              className="stitch-action-pill start-rec"
+              onClick={handleGenerateReport}
+              disabled={isGeneratingReport || isLoading || !editor || !canvasHasContent}
+              title={
+                !canvasHasContent
+                  ? "Add report text in the editor (e.g. from chat or after recording) before generating."
+                  : undefined
+              }
+            >
+              {isGeneratingReport ? "⏳ Working…" : "📋 Generate report"}
+            </button>
           </div>
+          {reportActionMsg && (
+            <p
+              className={`insights-report-feedback ${reportActionMsg.kind === "err" ? "is-error" : "is-ok"}`}
+              role="status"
+            >
+              {reportActionMsg.text}
+            </p>
+          )}
           <div className="tiptap-clinical-container">
             <EditorContent editor={editor} />
           </div>
