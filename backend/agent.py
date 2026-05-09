@@ -8,7 +8,7 @@ import os
 
 # LangGraph imports
 from langchain_core.runnables import RunnableConfig
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
 from langgraph.graph import StateGraph, END, START
 from langgraph.types import Command
@@ -119,25 +119,26 @@ async def chat_node(state: AgentState, config: Optional[RunnableConfig] = None):
             tool_call_args = tool_call.args
 
         if tool_call_name == "write_document_local":
-            # Add the tool response to messages
-            tool_response = {
-                "role": "tool",
-                "content": "Document written.",
-                "tool_call_id": tool_call_id
-            }
-
-            # Add confirmation tool call
-            confirm_tool_call = {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [{
-                    "id": str(uuid.uuid4()),
-                    "function": {
+            # Use LangChain message types so AG-UI / CopilotKit emit camelCase
+            # toolCalls + toolCallId in run newMessages. Raw dicts with
+            # tool_calls / tool_call_id often skip processAgentResult's frontend
+            # tool execution, so HITL never reaches "executing" and Confirm stays disabled.
+            tool_response = ToolMessage(
+                id=str(uuid.uuid4()),
+                content="Document written.",
+                tool_call_id=tool_call_id,
+            )
+            confirm_tool_call = AIMessage(
+                id=str(uuid.uuid4()),
+                content="",
+                tool_calls=[
+                    {
                         "name": "confirm_changes",
-                        "arguments": "{}"
+                        "args": {},
+                        "id": str(uuid.uuid4()),
                     }
-                }]
-            }
+                ],
+            )
 
             messages = messages + [tool_response, confirm_tool_call]
 

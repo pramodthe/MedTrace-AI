@@ -54,6 +54,12 @@
       "sourceType": "github",
       "skillPath": "skills/copilotkit-upgrade/SKILL.md",
       "computedHash": "4a7d2d41a2c3f193a02611743a29fae16e1ff88f0e562828ffa6a99eda0bded9"
+    },
+    "shadcn": {
+      "source": "shadcn/ui",
+      "sourceType": "github",
+      "skillPath": "skills/shadcn/SKILL.md",
+      "computedHash": "80a6226e78f6d1fe464214ae0ef449d49d8ffaa3e7704f011e9b418c678ad4d1"
     }
   }
 }

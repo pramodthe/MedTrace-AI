@@ -12,4 +12,12 @@ export default defineConfig({
       },
     },
   },
+  preview: {
+    proxy: {
+      '/api/copilotkit': {
+        target: 'http://localhost:4000',
+        changeOrigin: true,
+      },
+    },
+  },
 })

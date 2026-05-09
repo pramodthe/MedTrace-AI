@@ -1,11 +1,12 @@
-import { useEffect, useState, useRef } from "react";
+import { useCallback, useEffect, useState, useRef } from "react";
 import { CopilotKit } from "@copilotkit/react-core";
-import { 
-  useAgent, 
-  UseAgentUpdate, 
-  useHumanInTheLoop, 
-  useConfigureSuggestions,
-  CopilotSidebar,
+import {
+  CopilotChatConfigurationProvider,
+  useAgent,
+  UseAgentUpdate,
+  useCopilotKit,
+  useHumanInTheLoop,
+  useRenderToolCall,
 } from "@copilotkit/react-core/v2";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
@@ -21,7 +22,7 @@ const defaultSession = {
   id: "preloaded-knee-consultation",
   timestamp: new Date().toISOString(),
   duration: "03:45",
-  transcript: "Clinician: Good afternoon, Benjamin. I'm doctor Donald Keene.\nPatient: Good afternoon, doctor.\nClinician: Before we get started, I just have questions. Can you please confirm your date of birth for me?\nPatient: March 28th, 2002.\nClinician: Great. Thanks Benjamin. So what brings you to see me today?\nPatient: Uh I've noticed this hard lump behind my knee and I'm concerned.",
+  transcript: "",
   report: `## Reason for visit
 Hard lump behind the knee.
 
@@ -34,26 +35,31 @@ Hard lump behind the knee.
 
 export default function App() {
   return (
+    // useSingleEndpoint defaults true in <CopilotKit/>; multi-route Express needs REST (GET …/info).
     <CopilotKit
       runtimeUrl="/api/copilotkit"
+      useSingleEndpoint={false}
       showDevConsole={true}
       agent="predictive_state_updates"
     >
+      <CopilotChatConfigurationProvider agentId="predictive_state_updates">
       <div className="clinical-app-layout">
+        <header className="app-header">
+          <div className="logo-container">
+            <div className="logo-icon">🩺</div>
+            <h1 className="app-title">Clinical Cortex <span style={{ fontWeight: 400, color: "var(--stitch-secondary)" }}>— MedTrace AI</span></h1>
+          </div>
+          <div className="flex items-center gap-4">
+            <span className="text-xs font-semibold bg-emerald-50 text-emerald-600 px-3 py-1.5 rounded-full border border-emerald-100 flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-ping"></span> Live Handshake Active
+            </span>
+          </div>
+        </header>
         <main className="clinical-main-content">
           <DocumentEditor />
         </main>
-        <aside className="clinical-sidebar-wrapper">
-          <CopilotSidebar
-            agentId="predictive_state_updates"
-            defaultOpen={true}
-            labels={{
-              modalHeaderTitle: "AI Consultation Assistant",
-              chatInputPlaceholder: "Ask the AI to edit report...",
-            }}
-          />
-        </aside>
       </div>
+      </CopilotChatConfigurationProvider>
     </CopilotKit>
   );
 }
@@ -267,6 +273,7 @@ const DocumentEditor = () => {
   const [isUploading, setIsUploading] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
   const [errorMsg, setErrorMsg] = useState("");
+  const [aiBubbleDismissed, setAiBubbleDismissed] = useState(false);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -442,8 +449,7 @@ const DocumentEditor = () => {
   };
 
   const playAudio = (session: any) => {
-    if (!session.audio_base64) {
-      alert("This is a demo session. Try recording a new consultation!");
+    if (!session.audio_base64?.trim()) {
       return;
     }
 
@@ -468,55 +474,65 @@ const DocumentEditor = () => {
     }
   };
 
-  // Floating command bar send logic
+  // Headless CopilotKit command send logic
   const handleSendCommand = async () => {
     if (!commandText.trim()) return;
     const textToSend = commandText;
     setCommandText("");
     
     try {
-      const response = await fetch("http://localhost:8000/api/voice-chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          text: textToSend,
-          document: currentDocument
-        })
+      agent.addMessage({
+        id: Math.random().toString(36).substring(7),
+        role: "user",
+        content: textToSend,
       });
-      if (response.ok) {
-        const data = await response.json();
-        const htmlContent = fromMarkdown(data.document);
-        editor?.commands.setContent(htmlContent);
-        setCurrentDocument(data.document);
-        setAgentState({ document: data.document });
-      }
+      await agent.runAgent();
     } catch (err) {
-      console.error("Error sending command:", err);
+      console.error("Error sending headless command:", err);
     }
   };
 
-  useConfigureSuggestions({
-    suggestions: [
-      {
-        title: "Reason for visit",
-        message: "Summarize the primary reason for this patient's clinical visit.",
-      },
-      {
-        title: "History of illness",
-        message: "Generate a History of Present Illness (HPI) based on the audio transcript.",
-      },
-    ],
-    available: "always",
-  });
+  const renderToolCall = useRenderToolCall();
+  const { copilotkit, executingToolCallIds } = useCopilotKit();
 
   const { agent } = useAgent({
     agentId: "predictive_state_updates",
-    updates: [UseAgentUpdate.OnStateChanged, UseAgentUpdate.OnRunStatusChanged],
+    updates: [UseAgentUpdate.OnMessagesChanged, UseAgentUpdate.OnStateChanged, UseAgentUpdate.OnRunStatusChanged],
   });
 
   const agentState = agent.state as AgentState | undefined;
   const setAgentState = (s: AgentState) => agent.setState(s);
   const isLoading = agent.isRunning;
+
+  const assistantMessages = agent.messages.filter(m => m.role === "assistant" && m.content);
+  const latestAssistantMessage = assistantMessages[assistantMessages.length - 1];
+  const hasBubble = isLoading || !!latestAssistantMessage;
+
+  const activeToolCallMessage = agent.messages.find(
+    (m) =>
+      m.role === "assistant" &&
+      (m as any).toolCalls &&
+      (m as any).toolCalls.some(
+        (tc: any) =>
+          !agent.messages.some(
+            (tm) => tm.role === "tool" && (tm as any).toolCallId === tc.id
+          )
+      )
+  );
+
+  const activeToolCall = (activeToolCallMessage as any)?.toolCalls?.find(
+    (tc: any) =>
+      !agent.messages.some(
+        (tm) => tm.role === "tool" && (tm as any).toolCallId === tc.id
+      )
+  );
+
+  const renderedTool = activeToolCall ? renderToolCall({ toolCall: activeToolCall }) : null;
+  const hasHITL = !!renderedTool;
+
+  useEffect(() => {
+    if (isLoading) setAiBubbleDismissed(false);
+  }, [isLoading]);
 
   const wasRunning = useRef(false);
 
@@ -552,6 +568,15 @@ const DocumentEditor = () => {
 
   const text = editor?.getText() || "";
 
+  const currentDocumentRef = useRef(currentDocument);
+  const agentStateRef = useRef(agentState);
+  const editorRef = useRef(editor);
+  const agentRef = useRef(agent);
+  currentDocumentRef.current = currentDocument;
+  agentStateRef.current = agentState;
+  editorRef.current = editor;
+  agentRef.current = agent;
+
   useEffect(() => {
     if (!isLoading) {
       setCurrentDocument(text);
@@ -561,32 +586,115 @@ const DocumentEditor = () => {
     }
   }, [text, isLoading]);
 
-  // Support human-in-the-loop triggers
-  useHumanInTheLoop(
-    {
-      agentId: "predictive_state_updates",
-      name: "confirm_changes",
-      render: ({ args, respond, status }) => (
-        <ConfirmChanges
-          args={args}
-          respond={respond}
-          status={status}
-          onReject={() => {
-            editor?.commands.setContent(fromMarkdown(currentDocument));
-            setAgentState({ document: currentDocument });
-          }}
-          onConfirm={() => {
-            editor?.commands.setContent(fromMarkdown(agentState?.document || ""));
-            setCurrentDocument(agentState?.document || "");
-            setAgentState({ document: agentState?.document || "" });
-          }}
-        />
-      ),
-    },
-    [agentState?.document, currentDocument]
+  // HITL: keep deps stable ([]). CopilotKit's useFrontendTool re-runs removeTool/addTool when deps
+  // change; streaming document updates were unregistering confirm_changes during processAgentResult,
+  // so the tool never reached "executing" and respond stayed undefined (disabled buttons).
+  const confirmChangesRender = useCallback(
+    ({ args, respond, status }: { args: any; respond: any; status: any }) => (
+      <ConfirmChanges
+        args={args}
+        respond={respond}
+        status={status}
+        onReject={() => {
+          const doc = currentDocumentRef.current;
+          editorRef.current?.commands.setContent(fromMarkdown(doc));
+          agentRef.current.setState({ document: doc });
+        }}
+        onConfirm={() => {
+          const doc = agentStateRef.current?.document || "";
+          editorRef.current?.commands.setContent(fromMarkdown(doc));
+          setCurrentDocument(doc);
+          agentRef.current.setState({ document: doc });
+        }}
+      />
+    ),
+    []
   );
 
+  // Omit agentId so getTool() resolves via global fallback (name match, !tool.agentId).
+  // Scoped registration + HttpAgent agentId sometimes missed the tool during processAgentResult.
+  useHumanInTheLoop(
+    {
+      name: "confirm_changes",
+      render: confirmChangesRender,
+    },
+    []
+  );
+
+  // LangGraph + HttpAgent sometimes omits the synthetic confirm assistant message from
+  // runAgentResult.newMessages, so processAgentResult never runs the frontend tool and
+  // Confirm stays disabled. Re-drive processAgentResult once per pending toolCall id.
+  const confirmKickAttemptedRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const tc = activeToolCall as { id?: string; function?: { name?: string } } | undefined;
+    const msg = activeToolCallMessage as { id?: string; role?: string } | undefined;
+    if (!tc?.id || tc.function?.name !== "confirm_changes" || !msg?.id) return;
+    const toolCallId = tc.id;
+    if (isLoading) return;
+    if (executingToolCallIds.has(toolCallId)) return;
+
+    const hasToolResult = agent.messages.some(
+      (tm) => tm.role === "tool" && (tm as { toolCallId?: string }).toolCallId === toolCallId
+    );
+    if (hasToolResult) {
+      confirmKickAttemptedRef.current.delete(toolCallId);
+      return;
+    }
+    if (confirmKickAttemptedRef.current.has(toolCallId)) return;
+    confirmKickAttemptedRef.current.add(toolCallId);
+
+    const runHandler = (
+      copilotkit as unknown as {
+        runHandler?: {
+          processAgentResult: (p: {
+            runAgentResult: { newMessages: unknown[] };
+            agent: typeof agent;
+          }) => Promise<unknown>;
+        };
+      }
+    ).runHandler;
+    if (!runHandler?.processAgentResult) {
+      confirmKickAttemptedRef.current.delete(toolCallId);
+      return;
+    }
+
+    void runHandler
+      .processAgentResult({
+        runAgentResult: { newMessages: [msg] },
+        agent,
+      })
+      .catch((err: unknown) => {
+        console.error("[HITL] confirm_changes processAgentResult kick failed:", err);
+        confirmKickAttemptedRef.current.delete(toolCallId);
+      });
+  }, [
+    activeToolCall,
+    activeToolCallMessage,
+    agent,
+    copilotkit,
+    executingToolCallIds,
+    isLoading,
+  ]);
+
   const activeSession = sessions.find((s) => s.id === activeSessionId) || defaultSession;
+  const sessionHasAudio = Boolean(activeSession?.audio_base64?.trim());
+
+  const waveformHostRef = useRef<HTMLDivElement | null>(null);
+  const [waveDims, setWaveDims] = useState({ width: 280, height: 32 });
+
+  useEffect(() => {
+    const el = waveformHostRef.current;
+    if (!el) return;
+    const measure = () => {
+      const w = Math.max(160, Math.floor(el.clientWidth));
+      setWaveDims((d) => (d.width === w ? d : { ...d, width: w }));
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   useEffect(() => {
     if (activeSession?.audio_base64) {
@@ -615,121 +723,134 @@ const DocumentEditor = () => {
   const parsedTranscript = parseTranscript(activeSession.transcript);
 
   return (
-    <div className="stitch-outer-frame-card">
-      {/* 1. Playback & Voice Consultation Header Card */}
-      <div className="stitch-consultation-header">
-        <div className="flex justify-between items-start">
-          <div>
-            <h2 className="consultation-header-title">Knee problem mock consultation</h2>
-            <p className="consultation-header-subtitle">
-              <span>🎙️ audio by Gemini TTS</span>
-            </p>
-            {errorMsg && <p className="text-red-500 text-xs mt-1 font-semibold">{errorMsg}</p>}
-          </div>
-          <div className="flex gap-2">
-            {isRecording ? (
-              <button className="stitch-action-pill stop-rec" onClick={stopRecording}>
-                ⏹ Stop ({formatTime(recordingTime)})
-              </button>
-            ) : isUploading ? (
-              <button className="stitch-action-pill stop-rec" disabled>
-                Transcribing...
-              </button>
-            ) : (
-              <button className="stitch-action-pill start-rec" onClick={startRecording}>
-                🎙️ Record Consultation
-              </button>
-            )}
-            <label className="stitch-action-pill outline cursor-pointer" style={{ cursor: "pointer" }}>
-              📁 Upload Audio File
-              <input 
-                type="file" 
-                accept="audio/*" 
-                className="hidden" 
-                onChange={handleAudioUpload}
-                style={{ display: "none" }}
-                disabled={isRecording || isUploading}
-              />
-            </label>
-          </div>
-        </div>
-
-        {/* Playback Controls & Waveform Timeline Row */}
-        <div className="stitch-playback-row">
-          <div className="playback-controls">
-            <button 
-              className={`playback-play-btn ${playingSessionId === activeSession.id ? "playing" : ""}`}
-              onClick={() => playAudio(activeSession)}
-            >
-              {playingSessionId === activeSession.id ? "⏸" : "▶"}
-            </button>
-          </div>
-
-          <div className="waveform-timeline-container">
-            {isRecording && mediaRecorderRef.current ? (
-              <LiveAudioVisualizer
-                mediaRecorder={mediaRecorderRef.current}
-                width={500}
-                height={40}
-                barColor="#0b57d0"
-              />
-            ) : activeAudioBlob ? (
-              <AudioVisualizer
-                blob={activeAudioBlob}
-                width={500}
-                height={40}
-                barWidth={2}
-                gap={1.5}
-                barColor="#dadce0"
-                barPlayedColor="#f29900"
-                currentTime={playbackTime}
-              />
-            ) : (
-              <div className="mock-waveform-bars">
-                {Array.from({ length: 48 }).map((_, i) => (
-                  <span 
-                    key={i} 
-                    className={`wave-bar ${i < 18 ? "played" : ""}`} 
-                    style={{ height: `${12 + Math.sin(i * 0.4) * 16 + Math.cos(i * 0.1) * 8}px` }}
-                  />
-                ))}
-              </div>
-            )}
-          </div>
-          <span className="waveform-duration-badge">{activeSession.duration}</span>
-        </div>
-      </div>
-
-      {/* 2. Two-Column Dialogue & insights Panels Grid */}
+    <div className="document-editor-workspace">
+      <div className="stitch-outer-frame-card">
+      {/* One row: left stack (audio + transcript) | insights fills same height as grid */}
       <div className="stitch-columns-grid relative">
-        {/* Left Column: Transcript dialogue bubbles */}
-        <div className="stitch-transcript-panel">
-          <div className="panel-header-row">
-            <h3 className="panel-section-title">Transcript</h3>
-            <div className="flex gap-2 text-gray-400">
-              <span>🔍</span>
-              <span>⋮</span>
+        <div className="stitch-left-stack">
+          <div className="stitch-consultation-header">
+            <div className="consultation-header-toolbar">
+              <div className="consultation-header-status">
+                {errorMsg && <p className="consultation-error">{errorMsg}</p>}
+                {!errorMsg && !sessionHasAudio && !isRecording && (
+                  <p className="consultation-hint">No audio for this session — waveform appears after you record or upload.</p>
+                )}
+              </div>
+              <div className="consultation-header-actions">
+                {isRecording ? (
+                  <button type="button" className="stitch-action-pill stop-rec" onClick={stopRecording}>
+                    ⏹ Stop ({formatTime(recordingTime)})
+                  </button>
+                ) : isUploading ? (
+                  <button type="button" className="stitch-action-pill stop-rec" disabled>
+                    Transcribing...
+                  </button>
+                ) : (
+                  <button type="button" className="stitch-action-pill start-rec" onClick={startRecording}>
+                    🎙️ Record
+                  </button>
+                )}
+                <label className="stitch-action-pill outline cursor-pointer">
+                  📁 Upload
+                  <input 
+                    type="file" 
+                    accept="audio/*" 
+                    className="hidden" 
+                    onChange={handleAudioUpload}
+                    style={{ display: "none" }}
+                    disabled={isRecording || isUploading}
+                  />
+                </label>
+              </div>
+            </div>
+
+            <div className="stitch-playback-row">
+              <div className="playback-controls">
+                <button 
+                  type="button"
+                  className={`playback-play-btn ${playingSessionId === activeSession.id ? "playing" : ""} ${!sessionHasAudio && !isRecording ? "disabled" : ""}`}
+                  onClick={() => playAudio(activeSession)}
+                  disabled={!sessionHasAudio && !isRecording}
+                  title={!sessionHasAudio && !isRecording ? "Add audio to enable playback" : undefined}
+                >
+                  {playingSessionId === activeSession.id ? "⏸" : "▶"}
+                </button>
+              </div>
+
+              <div className="waveform-timeline-host" ref={waveformHostRef}>
+                <div className="waveform-timeline-container">
+                {isRecording && mediaRecorderRef.current ? (
+                  <LiveAudioVisualizer
+                    mediaRecorder={mediaRecorderRef.current}
+                    width={waveDims.width}
+                    height={waveDims.height}
+                    barColor="#0052cc"
+                  />
+                ) : activeAudioBlob ? (
+                  <AudioVisualizer
+                    blob={activeAudioBlob}
+                    width={waveDims.width}
+                    height={waveDims.height}
+                    barWidth={1.5}
+                    gap={1}
+                    barColor="#cbd5e1"
+                    barPlayedColor="#0052cc"
+                    currentTime={playbackTime}
+                  />
+                ) : (
+                  <div className="waveform-empty-placeholder" role="status" aria-label="No audio waveform for this session">
+                    <span className="waveform-empty-line" aria-hidden />
+                    <span className="waveform-empty-label">No waveform</span>
+                  </div>
+                )}
+                </div>
+              </div>
+              <span className="waveform-duration-badge">{activeSession.duration}</span>
             </div>
           </div>
+
+          <div className="stitch-transcript-panel">
+          <div className="panel-header-row panel-header-row--simple">
+            <h3 className="panel-section-title">Transcript</h3>
+          </div>
           <div className="transcript-bubbles-scroller">
-            {parsedTranscript.map((line, idx) => (
-              <div key={idx} className={`transcript-bubble-wrapper ${line.speaker.toLowerCase()}`}>
-                <div className="bubble-meta">
-                  <div className="bubble-avatar">
-                    {line.speaker === "Clinician" ? "✨" : "👤"}
-                  </div>
-                  <span className="speaker-name">{line.speaker}</span>
-                  <span className="speaker-time">{line.time}</span>
+            {parsedTranscript.length === 0 ? (
+              <div
+                className="transcript-empty-state"
+                role="status"
+                aria-live="polite"
+                aria-label="Transcript is empty until audio is processed"
+              >
+                <div className="transcript-empty-visual" aria-hidden>
+                  <span className="transcript-empty-line" />
                 </div>
-                <div className="bubble-content-card">
-                  <p>{line.text}</p>
-                </div>
+                <p className="transcript-empty-kicker">Diarized dialogue</p>
+                <p className="transcript-empty-title">No transcript yet</p>
+                <p className="transcript-empty-hint">
+                  Record a consultation or upload audio. Speaker turns will appear here after
+                  transcription.
+                </p>
               </div>
-            ))}
+            ) : (
+              parsedTranscript.map((line, idx) => (
+                <div key={idx} className={`transcript-bubble-wrapper ${line.speaker.toLowerCase()}`}>
+                  <div className="bubble-meta">
+                    <div className="bubble-avatar">
+                      {line.speaker === "Clinician" ? "✨" : "👤"}
+                    </div>
+                    <span className="speaker-name">{line.speaker}</span>
+                    <span className="speaker-time">{line.time}</span>
+                  </div>
+                  <div className="bubble-content-card">
+                    <p>{line.text}</p>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
           </div>
         </div>
 
-        {/* Right Column: AI Insights document editor */}
         <div className="stitch-insights-panel">
           <div className="panel-header-row">
             <h3 className="panel-section-title">AI Insights</h3>
@@ -751,13 +872,52 @@ const DocumentEditor = () => {
         </div>
       </div>
 
-      {/* 3. Floating AI Command Bar */}
-      <div className="stitch-floating-command-bar">
+      {/* Human In The Loop Active Tool Rendering */}
+      {renderedTool && (
+        <div className="stitch-hitl-container">
+          {renderedTool}
+        </div>
+      )}
+
+      {/* Glassmorphic AI Response Bubble */}
+      {hasBubble && !hasHITL && !aiBubbleDismissed && (
+        <div className="stitch-ai-response-bubble">
+          <button
+            type="button"
+            className="bubble-close-btn"
+            aria-label="Dismiss AI message"
+            onClick={() => setAiBubbleDismissed(true)}
+          >
+            ×
+          </button>
+          <div className="bubble-header">
+            <span className="bubble-sparkle-icon">✨</span>
+            <span className="bubble-speaker-title">AI CONSULTANT</span>
+            {isLoading && <span className="bubble-typing-indicator">Drafting report...</span>}
+          </div>
+          <div className="bubble-text-content">
+            {isLoading && (!latestAssistantMessage || latestAssistantMessage.role !== "assistant") ? (
+              <div className="pulse-text">Updating clinical document in real-time...</div>
+            ) : (
+              typeof latestAssistantMessage?.content === "string" 
+                ? latestAssistantMessage.content 
+                : Array.isArray(latestAssistantMessage?.content)
+                  ? latestAssistantMessage.content.map((c: any) => c.type === "text" ? c.text : "").join(" ")
+                  : ""
+            )}
+          </div>
+        </div>
+      )}
+
+      </div>
+
+      {/* 3. Docked AI Command Bar — always visible, no page scroll needed */}
+      <div className="stitch-docked-command-bar">
         <span className="command-sparkle">✨</span>
         <input 
           type="text" 
           className="command-input" 
-          placeholder="Ask the AI assistant to refine these insights..."
+          placeholder={isLoading ? "AI is processing…" : "Ask the AI to refine the clinical report…"}
           value={commandText}
           onChange={(e) => setCommandText(e.target.value)}
           onKeyDown={(e) => {
@@ -765,9 +925,10 @@ const DocumentEditor = () => {
               handleSendCommand();
             }
           }}
+          disabled={isLoading}
         />
-        <button className="command-send-btn" onClick={handleSendCommand}>
-          ▶
+        <button type="button" className="command-send-btn" onClick={handleSendCommand} disabled={isLoading}>
+          {isLoading ? "⚡" : "▶"}
         </button>
       </div>
     </div>
@@ -782,22 +943,21 @@ interface ConfirmChangesProps {
   onConfirm: () => void;
 }
 
-function ConfirmChanges({ respond, status, onReject, onConfirm }: ConfirmChangesProps) {
+function ConfirmChanges({ respond, onReject, onConfirm }: ConfirmChangesProps) {
   const [accepted, setAccepted] = useState<boolean | null>(null);
   return (
-    <div
-      data-testid="confirm-changes-modal"
-      className="bg-white p-5 rounded-xl shadow-md border border-gray-100 my-4"
-    >
-      <h2 className="text-md font-bold text-gray-900 mb-2 flex items-center gap-2">
-        <span>⚡</span> Confirm Proposed Changes
+    <div data-testid="confirm-changes-modal" className="confirm-changes-modal">
+      <h2 className="confirm-changes-title">
+        <span aria-hidden="true">⚡</span> Confirm Proposed Changes
       </h2>
-      <p className="text-sm text-gray-600 mb-4">Would you like to accept the new changes proposed by the AI editor?</p>
+      <p className="confirm-changes-body">
+        Would you like to accept the new changes proposed by the AI editor?
+      </p>
       {accepted === null && (
-        <div className="flex justify-end space-x-3">
+        <div className="confirm-changes-actions">
           <button
-            className="bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium text-sm py-2 px-4 rounded-lg transition-colors"
-            disabled={status !== "executing"}
+            type="button"
+            disabled={!respond}
             onClick={() => {
               if (respond) {
                 setAccepted(false);
@@ -809,8 +969,8 @@ function ConfirmChanges({ respond, status, onReject, onConfirm }: ConfirmChanges
             Reject
           </button>
           <button
-            className="bg-blue-600 hover:bg-blue-700 text-white font-medium text-sm py-2 px-4 rounded-lg shadow-sm shadow-blue-200 transition-colors"
-            disabled={status !== "executing"}
+            type="button"
+            disabled={!respond}
             onClick={() => {
               if (respond) {
                 setAccepted(true);
@@ -824,12 +984,12 @@ function ConfirmChanges({ respond, status, onReject, onConfirm }: ConfirmChanges
         </div>
       )}
       {accepted !== null && (
-        <div className="flex justify-end">
+        <div className="confirm-changes-feedback-wrap">
           <div
-            className={`text-sm font-semibold py-1.5 px-3 rounded-lg ${
-              accepted 
-                ? "bg-green-50 text-green-700 border border-green-200" 
-                : "bg-red-50 text-red-700 border border-red-200"
+            className={`confirm-changes-feedback ${
+              accepted
+                ? "confirm-changes-feedback--accepted"
+                : "confirm-changes-feedback--rejected"
             }`}
           >
             {accepted ? "✓ Accepted" : "✗ Rejected"}

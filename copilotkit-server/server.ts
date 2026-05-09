@@ -22,11 +22,14 @@ const runtime = new CopilotRuntime({
   },
 });
 
+// multi-route (default): mounts GET /threads, SSE, etc. Single-route only exposes POST /api/copilotkit
+// and breaks the dev console / thread list (404 on /api/copilotkit/threads).
 app.use(
   createCopilotEndpointExpress({
     runtime,
     basePath: "/api/copilotkit",
-    mode: "single-route",
+    mode: "multi-route",
+    cors: false,
   }),
 );
 
