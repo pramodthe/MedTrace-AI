@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { ChangeEvent, DragEvent, MouseEvent, ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ChangeEvent, MouseEvent, ReactNode } from "react";
 import {
   Brain,
   CheckCircle2,
@@ -9,9 +9,12 @@ import {
   Loader2,
   MessageSquareText,
   Moon,
+  Redo2,
   ShieldCheck,
   Sparkles,
   Sun,
+  Trash2,
+  Undo2,
   Upload,
   XCircle,
   ZoomIn,
@@ -33,9 +36,8 @@ type Segmentation = {
   label: string;
   confidence: number;
   volumeMl: number;
-  source: "mock" | "medsam2";
+  source: "mock" | "medgemma";
   box: RoiBox;
-  overlayUrl?: string;
 };
 
 type Study = {
@@ -59,13 +61,13 @@ type Study = {
     impression: string;
     recommendation: string;
     confidence: number;
-    source: "mock" | "medgemma" | "qwen-vl";
+    source: "mock" | "medgemma";
   };
 };
 
 type LlmStatus = {
-  provider: "mock" | "qwen-vl";
-  nebius_configured: boolean;
+  provider: "mock" | "medgemma";
+  medgemma_configured: boolean;
   model: string | null;
 };
 
@@ -83,7 +85,7 @@ const initialStudy: Study = {
   segmentations: [],
   report: {
     summary: "Awaiting DICOM upload",
-    findings: "Upload a DICOM file to render the image and generate a Qwen VL draft report.",
+    findings: "Upload a DICOM file to render the image and generate a Medgemma draft report.",
     impression: "No imaging study is loaded.",
     recommendation: "Use the Upload DICOM control on the left panel.",
     confidence: 0,
@@ -92,6 +94,8 @@ const initialStudy: Study = {
 };
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000";
+const MEDGEMMA_API_URL = import.meta.env.VITE_MEDGEMMA_API_URL ?? "http://127.0.0.1:1234/v1";
+const MEDGEMMA_MODEL = import.meta.env.VITE_MEDGEMMA_MODEL ?? "medgemma-1.5-4b-it";
 
 async function postStudyFile(file: File) {
   const formData = new FormData();
@@ -110,40 +114,85 @@ async function postStudyFile(file: File) {
 }
 
 async function requestSegmentation(studyId: string, prompt: RoiBox) {
-  const response = await fetch(`${API_BASE_URL}/studies/${studyId}/segmentations/medsam2`, {
+  const response = await fetch(`${API_BASE_URL}/studies/${studyId}/segmentations/medgemma`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ prompt }),
   });
 
   if (!response.ok) {
-    throw new Error("MedSAM2 API is unavailable");
+    throw new Error("Medgemma segmentation API is unavailable");
   }
 
-  const segmentation = (await response.json()) as Segmentation;
-  if (segmentation.overlayUrl?.startsWith("/")) {
-    segmentation.overlayUrl = `${API_BASE_URL}${segmentation.overlayUrl}`;
-  }
-  return segmentation;
+  return (await response.json()) as Segmentation;
 }
 
 async function requestReport(study: Study) {
-  const response = await fetch(`${API_BASE_URL}/studies/${study.id}/reports/qwen-vl`, {
+  const segSummary =
+    study.segmentations.length > 0
+      ? study.segmentations
+          .map((s) => `${s.label} (confidence ${(s.confidence * 100).toFixed(0)}%, volume ${s.volumeMl} ml)`)
+          .join("; ")
+      : "No segmentation masks available.";
+
+  const userContent = `You are a radiology AI assistant. Generate a structured radiology report for the following imaging study.
+
+Modality: ${study.modality}
+Body Part: ${study.bodyPart}
+Patient: ${study.patientName}
+Segmentation Findings: ${segSummary}
+
+Respond in this exact JSON format:
+{
+  "summary": "one-line clinical summary",
+  "findings": "detailed findings paragraph",
+  "impression": "clinical impression",
+  "recommendation": "follow-up recommendation",
+  "confidence": 0.0-1.0
+}`;
+
+  const messages: Array<{ role: string; content: string | Array<Record<string, unknown>> }> = [
+    { role: "system", content: "You are a medical imaging AI. Respond only with valid JSON matching the requested schema." },
+    { role: "user", content: userContent },
+  ];
+
+  if (study.previewUrl) {
+    let imageUrl = study.previewUrl;
+    try {
+      const imgResp = await fetch(study.previewUrl);
+      const imgBlob = await imgResp.blob();
+      const base64 = await new Promise<string>((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result as string);
+        reader.readAsDataURL(imgBlob);
+      });
+      imageUrl = base64;
+    } catch {
+      // If conversion fails, send the original URL as a fallback.
+    }
+    messages[1].content = [
+      { type: "text", text: userContent },
+      { type: "image_url", image_url: { url: imageUrl } },
+    ];
+  }
+
+  const response = await fetch(`${MEDGEMMA_API_URL}/chat/completions`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      modality: study.modality,
-      bodyPart: study.bodyPart,
-      segmentations: study.segmentations,
+      model: MEDGEMMA_MODEL,
+      messages,
+      max_tokens: 1024,
+      temperature: 0.3,
     }),
   });
 
   if (!response.ok) {
-    let detail = "Qwen VL API is unavailable";
+    let detail = "Medgemma API is unavailable";
     try {
-      const payload = (await response.json()) as { detail?: string };
-      if (payload.detail) {
-        detail = payload.detail;
+      const payload = (await response.json()) as { error?: { message?: string } };
+      if (payload.error?.message) {
+        detail = payload.error.message;
       }
     } catch {
       // Keep the generic error when the backend response is not JSON.
@@ -151,15 +200,51 @@ async function requestReport(study: Study) {
     throw new Error(detail);
   }
 
-  return (await response.json()) as Study["report"];
+  const completion = (await response.json()) as {
+    choices: Array<{ message: { content: string } }>;
+  };
+
+  const raw = completion.choices?.[0]?.message?.content ?? "";
+  let parsed: Record<string, unknown>;
+  try {
+    const jsonMatch = raw.match(/\{[\s\S]*\}/);
+    parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : {};
+  } catch {
+    parsed = {};
+  }
+
+  return {
+    summary: (parsed.summary as string) ?? "Medgemma draft generated",
+    findings: (parsed.findings as string) ?? raw,
+    impression: (parsed.impression as string) ?? "See findings above.",
+    recommendation: (parsed.recommendation as string) ?? "Clinical correlation recommended.",
+    confidence: typeof parsed.confidence === "number" ? Math.min(1, Math.max(0, parsed.confidence)) : 0.5,
+    source: "medgemma" as const,
+  };
 }
 
 async function requestLlmStatus() {
-  const response = await fetch(`${API_BASE_URL}/llm/status`);
-  if (!response.ok) {
-    throw new Error("LLM status API is unavailable");
+  try {
+    const response = await fetch(`${MEDGEMMA_API_URL}/models`);
+    if (!response.ok) {
+      throw new Error();
+    }
+
+    const data = (await response.json()) as {
+      data: Array<{ id: string }>;
+    };
+
+    const modelIds = data.data?.map((m) => m.id) ?? [];
+    const medgemmaAvailable = modelIds.some((id) => id.toLowerCase().includes("medgemma"));
+
+    return {
+      provider: medgemmaAvailable ? "medgemma" as const : "mock" as const,
+      medgemma_configured: medgemmaAvailable,
+      model: medgemmaAvailable ? modelIds.find((id) => id.toLowerCase().includes("medgemma")) ?? MEDGEMMA_MODEL : null,
+    } satisfies LlmStatus;
+  } catch {
+    throw new Error("Medgemma API is not reachable at " + MEDGEMMA_API_URL);
   }
-  return (await response.json()) as LlmStatus;
 }
 
 function App() {
@@ -168,12 +253,23 @@ function App() {
   const [segmentVisible, setSegmentVisible] = useState(true);
   const [zoom, setZoom] = useState(100);
   const [brightness, setBrightness] = useState(100);
-  const [llmStatus, setLlmStatus] = useState<LlmStatus>({ provider: "mock", nebius_configured: false, model: null });
+  const [llmStatus, setLlmStatus] = useState<LlmStatus>({ provider: "mock", medgemma_configured: false, model: null });
   const [isDragging, setIsDragging] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [feedbackText, setFeedbackText] = useState("");
   const study = studies.find((candidate) => candidate.id === activeStudyId) ?? studies[0] ?? initialStudy;
-  const hasLoadedStudy = study.id !== initialStudy.id;
+
+  // Undo / Redo history keyed by study id
+  const [undoStacks, setUndoStacks] = useState<Record<string, Segmentation[][]>>({});
+  const [redoStacks, setRedoStacks] = useState<Record<string, Segmentation[][]>>({});
+
+  const pushUndo = useCallback(
+    (studyId: string, segmentations: Segmentation[]) => {
+      setUndoStacks((prev) => ({ ...prev, [studyId]: [...(prev[studyId] ?? []), segmentations] }));
+      setRedoStacks((prev) => ({ ...prev, [studyId]: [] }));
+    },
+    [],
+  );
 
   useBrowserStatus(setLlmStatus);
   const updateStudy = (updater: (study: Study) => Study) => {
@@ -181,26 +277,28 @@ function App() {
   };
 
   const buildFallbackStudy = (file: File): Study => {
-    const isDicom = true;
+    const isDicom = file.name.toLowerCase().endsWith(".dcm") || file.type === "application/dicom";
+    const canPreview = file.type.startsWith("image/");
+    const previewUrl = canPreview ? URL.createObjectURL(file) : undefined;
 
     return {
       id: `LOCAL-${Date.now()}`,
-      patientName: file.name,
+      patientName: "Uploaded Study",
       patientDetail: "Local file",
-      modality: "DICOM",
+      modality: isDicom ? "DICOM" : "IMG",
       bodyPart: "Unspecified",
       timestamp: "Just now",
-      series: "DICOM series",
-      slices: 1,
+      series: isDicom ? "DICOM series" : "Image preview",
+      slices: isDicom ? 1 : 1,
       uploadedFileName: file.name,
-      previewUrl: undefined,
+      previewUrl,
       isDicom,
       status: "ready",
       reviewDecision: "unreviewed",
       segmentations: [],
       report: {
         summary: "Awaiting AI review",
-        findings: "The study is loaded locally. Run MedSAM2 segmentation or Qwen VL report generation.",
+        findings: "The study is loaded locally. Run Medgemma segmentation or report generation.",
         impression: "Pending AI draft and clinician review.",
         recommendation: "Select an ROI for segmentation if a suspicious region is present.",
         confidence: 0,
@@ -216,14 +314,6 @@ function App() {
   };
 
   const handleStudyFile = async (file: File) => {
-    const isDicomSelection =
-      file.name.toLowerCase().endsWith(".dcm") ||
-      file.name.toLowerCase().endsWith(".dicom") ||
-      file.type === "application/dicom";
-    if (!isDicomSelection) {
-      return;
-    }
-
     const fallbackStudy = buildFallbackStudy(file);
 
     try {
@@ -243,6 +333,7 @@ function App() {
   };
 
   const runSegmentation = async (prompt: RoiBox = { x: 0.47, y: 0.34, width: 0.16, height: 0.22 }) => {
+    pushUndo(study.id, study.segmentations);
     updateStudy((currentStudy) => ({ ...currentStudy, status: "segmenting" }));
     setSegmentVisible(true);
 
@@ -251,8 +342,7 @@ function App() {
       updateStudy((currentStudy) => ({
         ...currentStudy,
         status: "ready",
-        // Keep only the latest segmentation so each ROI analysis starts fresh.
-        segmentations: [{ ...segmentation, box: segmentation.box ?? prompt }],
+        segmentations: [{ ...segmentation, box: segmentation.box ?? prompt }, ...currentStudy.segmentations],
       }));
     } catch {
       const segmentation: Segmentation = {
@@ -266,8 +356,7 @@ function App() {
       updateStudy((currentStudy) => ({
         ...currentStudy,
         status: "ready",
-        // Keep only the latest segmentation so each ROI analysis starts fresh.
-        segmentations: [segmentation],
+        segmentations: [segmentation, ...currentStudy.segmentations],
       }));
     }
   };
@@ -283,23 +372,56 @@ function App() {
         ...currentStudy,
         status: "ready",
         report: {
-          summary: "Qwen VL draft unavailable",
+          summary: "Medgemma draft unavailable",
           findings:
             currentStudy.segmentations.length > 0
-              ? `AI draft based on ${currentStudy.segmentations.length} segmentation ROI(s). ${error instanceof Error ? error.message : "Backend Qwen VL service is unavailable."}`
+              ? `AI draft based on ${currentStudy.segmentations.length} segmentation ROI(s). ${error instanceof Error ? error.message : "Backend Medgemma service is unavailable."}`
               : error instanceof Error
                 ? error.message
                 : "No segmentation mask has been generated yet. Report quality improves when the model receives image context and ROI metadata.",
           impression: "Preliminary decision support only. No autonomous diagnosis should be made from this draft.",
-          recommendation: llmStatus.nebius_configured
-            ? "Qwen VL appears configured. Restart the backend if the key changed, then try Generate again."
-            : "Set NEBIUS_API_KEY in backend/.env, restart the backend, then generate the report again.",
+          recommendation: llmStatus.medgemma_configured
+            ? "Medgemma appears configured. Restart the backend if the endpoint changed, then try Generate again."
+            : "Ensure Medgemma is running on http://127.0.0.1:1234, restart the backend, then generate the report again.",
           confidence: currentStudy.segmentations.length > 0 ? 0.72 : 0.38,
-          source: "qwen-vl",
+          source: "medgemma",
         },
       }));
     }
   };
+
+  const handleUndo = () => {
+    const stack = undoStacks[study.id];
+    if (!stack || stack.length === 0) {
+      return;
+    }
+    const previous = stack[stack.length - 1];
+    setUndoStacks((prev) => ({ ...prev, [study.id]: stack.slice(0, -1) }));
+    setRedoStacks((prev) => ({ ...prev, [study.id]: [...(prev[study.id] ?? []), study.segmentations] }));
+    updateStudy((currentStudy) => ({ ...currentStudy, segmentations: previous }));
+  };
+
+  const handleRedo = () => {
+    const stack = redoStacks[study.id];
+    if (!stack || stack.length === 0) {
+      return;
+    }
+    const next = stack[stack.length - 1];
+    setRedoStacks((prev) => ({ ...prev, [study.id]: stack.slice(0, -1) }));
+    setUndoStacks((prev) => ({ ...prev, [study.id]: [...(prev[study.id] ?? []), study.segmentations] }));
+    updateStudy((currentStudy) => ({ ...currentStudy, segmentations: next }));
+  };
+
+  const handleClear = () => {
+    if (study.segmentations.length === 0) {
+      return;
+    }
+    pushUndo(study.id, study.segmentations);
+    updateStudy((currentStudy) => ({ ...currentStudy, segmentations: [] }));
+  };
+
+  const canUndo = (undoStacks[study.id]?.length ?? 0) > 0;
+  const canRedo = (redoStacks[study.id]?.length ?? 0) > 0;
 
   return (
     <main className="h-screen overflow-hidden bg-[#05070b] text-slate-100">
@@ -308,22 +430,25 @@ function App() {
 
         <ViewerWorkspace
           brightness={brightness}
+          canRedo={canRedo}
+          canUndo={canUndo}
           isDragging={isDragging}
           segmentVisible={segmentVisible}
           study={study}
           zoom={zoom}
-          canRunSegmentation={hasLoadedStudy}
+          onClear={handleClear}
           onDragStateChange={setIsDragging}
           onBrightnessChange={setBrightness}
+          onRedo={handleRedo}
           onRunSegmentation={runSegmentation}
           onSegmentVisibleChange={setSegmentVisible}
+          onUndo={handleUndo}
           onZoomChange={setZoom}
         />
 
         <DecisionPanel
           llmStatus={llmStatus}
           study={study}
-          canRunReport={hasLoadedStudy}
           onAccept={() => updateStudy((currentStudy) => ({ ...currentStudy, reviewDecision: "accepted" }))}
           onNeedsReview={() => {
             updateStudy((currentStudy) => ({ ...currentStudy, reviewDecision: "needs-review" }));
@@ -363,7 +488,7 @@ function useBrowserStatus(setLlmStatus: (status: LlmStatus) => void) {
       })
       .catch(() => {
         if (!cancelled) {
-          setLlmStatus({ provider: "mock", nebius_configured: false, model: null });
+          setLlmStatus({ provider: "mock", medgemma_configured: false, model: null });
         }
       });
 
@@ -394,7 +519,7 @@ function StudyPanel({ studies, activeStudyId, onFiles, onSelectStudy }: StudyPan
   return (
     <aside className="flex min-h-0 flex-col border-r border-slate-800 bg-[#080d15] max-lg:min-h-[360px]">
       <header className="border-b border-slate-800 px-4 py-4">
-        <input ref={fileInputRef} className="hidden" type="file" multiple accept=".dcm,.dicom,application/dicom" onChange={handleFileInput} />
+        <input ref={fileInputRef} className="hidden" type="file" multiple accept=".dcm,image/png,image/jpeg,image/webp" onChange={handleFileInput} />
         <button
           className="flex w-full items-center justify-center gap-2 rounded-md border border-cyan-400/25 bg-cyan-400/10 px-3 py-2 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-400/15"
           type="button"
@@ -415,7 +540,7 @@ function StudyPanel({ studies, activeStudyId, onFiles, onSelectStudy }: StudyPan
             {studies.map((study) => (
               <button
                 key={study.id}
-                className={`w-full rounded-md border px-2.5 py-2 text-left transition ${
+                className={`w-full rounded-md border p-3 text-left transition ${
                   activeStudyId === study.id
                     ? "border-cyan-300/45 bg-cyan-400/10 shadow-active-glow"
                     : "border-slate-800 bg-[#0c1420] hover:border-slate-600"
@@ -426,13 +551,20 @@ function StudyPanel({ studies, activeStudyId, onFiles, onSelectStudy }: StudyPan
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <p className="truncate text-sm font-semibold text-white">{study.patientName}</p>
-                    <p className="mt-0.5 truncate text-[11px] text-slate-500">{study.modality} {study.bodyPart}</p>
+                    <p className="mt-1 truncate text-xs text-slate-500">{study.patientDetail}</p>
                   </div>
                   <StatusDot decision={study.reviewDecision} />
                 </div>
-                <div className="mt-2 flex items-center justify-between gap-2 text-[11px] text-slate-500">
-                  <span className="truncate">{study.uploadedFileName ?? study.id}</span>
-                  <span>{study.timestamp}</span>
+                <div className="mt-3 flex items-center justify-between gap-2 text-xs">
+                  <span className="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-300">
+                    {study.modality} {study.bodyPart}
+                  </span>
+                  <span className="text-slate-500">{study.timestamp}</span>
+                </div>
+                <div className="mt-3 border-t border-slate-800 pt-3 text-xs leading-5 text-slate-400">
+                  <p className="truncate">{study.series}</p>
+                  <p className="truncate">{study.slices} slice{study.slices === 1 ? "" : "s"}</p>
+                  <p className="truncate">{study.uploadedFileName ?? study.id}</p>
                 </div>
               </button>
             ))}
@@ -449,12 +581,16 @@ type ViewerWorkspaceProps = {
   segmentVisible: boolean;
   isDragging: boolean;
   zoom: number;
-  canRunSegmentation: boolean;
+  canUndo: boolean;
+  canRedo: boolean;
   onSegmentVisibleChange: (visible: boolean) => void;
   onDragStateChange: (dragging: boolean) => void;
   onBrightnessChange: (brightness: number) => void;
   onZoomChange: (zoom: number) => void;
   onRunSegmentation: (prompt?: RoiBox) => void;
+  onUndo: () => void;
+  onRedo: () => void;
+  onClear: () => void;
 };
 
 function ViewerWorkspace({
@@ -463,17 +599,20 @@ function ViewerWorkspace({
   segmentVisible,
   isDragging,
   zoom,
-  canRunSegmentation,
+  canUndo,
+  canRedo,
   onSegmentVisibleChange,
   onDragStateChange,
   onBrightnessChange,
   onZoomChange,
   onRunSegmentation,
+  onUndo,
+  onRedo,
+  onClear,
 }: ViewerWorkspaceProps) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const [draftRoi, setDraftRoi] = useState<RoiBox | null>(null);
   const [roiStart, setRoiStart] = useState<{ x: number; y: number } | null>(null);
-  const defaultRoiPrompt: RoiBox = { x: 0.47, y: 0.34, width: 0.16, height: 0.22 };
   const windowLevel = useMemo(() => (study.modality === "CT" || study.modality === "DICOM" ? "W: 420 L: 38" : "Auto WL"), [study.modality]);
 
   const getPoint = (event: MouseEvent<HTMLDivElement>) => {
@@ -489,6 +628,7 @@ function ViewerWorkspace({
   };
 
   const handleRoiStart = (event: MouseEvent<HTMLDivElement>) => {
+    event.preventDefault();
     const point = getPoint(event);
     setRoiStart(point);
     setDraftRoi({ x: point.x, y: point.y, width: 0.01, height: 0.01 });
@@ -499,6 +639,7 @@ function ViewerWorkspace({
       return;
     }
 
+    event.preventDefault();
     const point = getPoint(event);
     setDraftRoi(normalizeRoi(roiStart, point));
   };
@@ -516,7 +657,35 @@ function ViewerWorkspace({
     }
   };
 
-  const hasFileDrag = (event: DragEvent<HTMLDivElement>) => Array.from(event.dataTransfer?.types ?? []).includes("Files");
+  // Capture mouseup even outside the viewport so the ROI isn't lost on drag-out.
+  useEffect(() => {
+    if (!roiStart) {
+      return;
+    }
+
+    const handleGlobalMouseUp = () => {
+      handleRoiEnd();
+    };
+
+    window.addEventListener("mouseup", handleGlobalMouseUp);
+    return () => window.removeEventListener("mouseup", handleGlobalMouseUp);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roiStart, draftRoi]);
+
+  // Keyboard shortcuts: Ctrl+Z undo, Ctrl+Y / Ctrl+Shift+Z redo
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key === "z" && !event.shiftKey) {
+        event.preventDefault();
+        if (canUndo) onUndo();
+      } else if ((event.ctrlKey || event.metaKey) && (event.key === "y" || (event.key === "z" && event.shiftKey))) {
+        event.preventDefault();
+        if (canRedo) onRedo();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [canUndo, canRedo, onUndo, onRedo]);
 
   return (
     <section className="flex min-h-0 flex-col bg-[#05070b]">
@@ -531,34 +700,58 @@ function ViewerWorkspace({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <ToolbarButton
-            icon={study.status === "segmenting" ? Loader2 : Brain}
-            label="Run MedSAM2 (Default ROI)"
-            loading={study.status === "segmenting"}
-            disabled={!canRunSegmentation}
-            title={
-              canRunSegmentation
-                ? "Quick test run with a preset ROI. Preferred workflow: draw ROI directly on the image."
-                : "Upload a study first to run MedSAM2."
-            }
-            onClick={() => onRunSegmentation(defaultRoiPrompt)}
-          />
+          <ToolbarButton icon={study.status === "segmenting" ? Loader2 : Brain} label="Medgemma" loading={study.status === "segmenting"} onClick={onRunSegmentation} />
           <button
             className={`inline-flex h-9 items-center gap-2 rounded-md border px-3 text-sm font-medium transition ${
               segmentVisible ? "border-cyan-300/40 bg-cyan-400/10 text-cyan-100" : "border-slate-700 bg-slate-950 text-slate-400"
             }`}
             type="button"
-            title={segmentVisible ? "Hide segmentation masks" : "Show segmentation masks"}
             onClick={() => onSegmentVisibleChange(!segmentVisible)}
           >
             <Layers className="h-4 w-4" />
-            {segmentVisible ? "Hide Masks" : "Show Masks"}
+            Seg
+          </button>
+          <div className="mx-1 h-6 w-px bg-slate-700" />
+          <button
+            className={`inline-flex h-9 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium transition ${
+              canUndo ? "border-slate-700 bg-slate-950 text-slate-200 hover:border-cyan-300/40 hover:text-cyan-100" : "border-slate-800 bg-slate-950/50 text-slate-600 cursor-not-allowed"
+            }`}
+            type="button"
+            disabled={!canUndo}
+            title="Undo (Ctrl+Z)"
+            onClick={onUndo}
+          >
+            <Undo2 className="h-3.5 w-3.5" />
+            Undo
+          </button>
+          <button
+            className={`inline-flex h-9 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium transition ${
+              canRedo ? "border-slate-700 bg-slate-950 text-slate-200 hover:border-cyan-300/40 hover:text-cyan-100" : "border-slate-800 bg-slate-950/50 text-slate-600 cursor-not-allowed"
+            }`}
+            type="button"
+            disabled={!canRedo}
+            title="Redo (Ctrl+Y)"
+            onClick={onRedo}
+          >
+            <Redo2 className="h-3.5 w-3.5" />
+            Redo
+          </button>
+          <button
+            className={`inline-flex h-9 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium transition ${
+              study.segmentations.length > 0 ? "border-red-400/30 bg-red-400/10 text-red-200 hover:border-red-300/50 hover:text-red-100" : "border-slate-800 bg-slate-950/50 text-slate-600 cursor-not-allowed"
+            }`}
+            type="button"
+            disabled={study.segmentations.length === 0}
+            title="Clear all markings"
+            onClick={onClear}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            Clear
           </button>
         </div>
       </header>
 
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-slate-800 bg-[#070b12] px-4 py-2">
-        <p className="text-xs text-slate-400">Workflow: draw ROI on the image to run MedSAM2 for that region; use Masks toggle to review overlays.</p>
         <div className="flex min-w-[220px] items-center gap-3 text-xs text-slate-300">
           <button
             className="grid h-7 w-7 place-items-center rounded-md border border-slate-800 bg-slate-950 text-slate-400 transition hover:border-amber-300/40 hover:text-amber-100"
@@ -609,76 +802,42 @@ function ViewerWorkspace({
       <div className="min-h-0 flex-1 p-4">
         <div
           ref={viewportRef}
-          className={`relative h-full min-h-[520px] overflow-hidden rounded-md border bg-black transition ${
+          className={`relative h-full min-h-[520px] select-none overflow-hidden rounded-md border bg-black transition ${
             isDragging ? "border-cyan-300 ring-4 ring-cyan-400/20" : "border-slate-800"
           } cursor-crosshair`}
           onMouseDown={handleRoiStart}
           onMouseMove={handleRoiMove}
           onMouseUp={handleRoiEnd}
-          onMouseLeave={() => {
-            setRoiStart(null);
-            setDraftRoi(null);
-          }}
           onDragEnter={(event) => {
-            if (!hasFileDrag(event)) {
-              return;
-            }
             event.preventDefault();
             onDragStateChange(true);
           }}
-          onDragLeave={(event) => {
-            if (!hasFileDrag(event)) {
-              return;
-            }
-            onDragStateChange(false);
-          }}
-          onDragOver={(event) => {
-            if (!hasFileDrag(event)) {
-              return;
-            }
-            event.preventDefault();
-          }}
+          onDragLeave={() => onDragStateChange(false)}
+          onDragOver={(event) => event.preventDefault()}
           onDrop={(event) => {
-            if (!hasFileDrag(event)) {
-              return;
-            }
             event.preventDefault();
             onDragStateChange(false);
           }}
         >
           {study.previewUrl ? (
             <img
-              className="pointer-events-none absolute inset-0 h-full w-full select-none object-contain transition-transform duration-200"
+              className="pointer-events-none absolute inset-0 h-full w-full object-contain transition-transform duration-200"
               src={study.previewUrl}
               alt={`${study.modality} ${study.bodyPart} preview`}
-              draggable={false}
               style={{ filter: `brightness(${brightness}%)`, transform: `scale(${zoom / 100})` }}
             />
           ) : (
-            <div className="absolute inset-0 bg-[#02050a]">
-              <div
-                className="absolute inset-0 opacity-25"
-                style={{
-                  backgroundImage:
-                    "linear-gradient(to right, rgba(148,163,184,0.08) 1px, transparent 1px), linear-gradient(to bottom, rgba(148,163,184,0.08) 1px, transparent 1px)",
-                  backgroundSize: "28px 28px",
-                  transform: `scale(${zoom / 100})`,
-                }}
-              />
-              <div className="absolute inset-0 grid place-items-center">
-                <div className="rounded-md border border-slate-700/70 bg-[#070d17]/90 px-6 py-5 text-center">
-                  <p className="text-sm font-semibold text-slate-200">No study loaded</p>
-                  <p className="mt-1 text-xs text-slate-400">Upload DICOM to start ROI-based segmentation.</p>
-                </div>
-              </div>
-            </div>
+            <div
+              className="medical-scan pointer-events-none absolute inset-0 transition-transform duration-200"
+              style={{ filter: `grayscale(1) contrast(1.08) brightness(${brightness * 0.9}%)`, transform: `scale(${zoom / 100})` }}
+            />
           )}
 
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_center,transparent_43%,rgba(0,0,0,0.62)_100%)]" />
           <ViewportOverlay study={study} windowLevel={windowLevel} />
 
           {segmentVisible && study.segmentations.length > 0 && (
-            <SegmentationOverlay segmentations={study.segmentations} zoom={zoom} />
+            <SegmentationOverlay segmentations={study.segmentations} />
           )}
 
           {draftRoi && (
@@ -689,7 +848,7 @@ function ViewerWorkspace({
             <div className="absolute inset-0 grid place-items-center bg-cyan-950/45 backdrop-blur-sm">
               <div className="rounded-md border border-cyan-300/50 bg-slate-950/85 px-6 py-5 text-center shadow-active-glow">
                 <Upload className="mx-auto h-7 w-7 text-cyan-200" />
-                <p className="mt-2 text-sm font-semibold text-white">Drop DICOM study</p>
+                <p className="mt-2 text-sm font-semibold text-white">Drop DICOM or image study</p>
                 <p className="mt-1 text-xs text-cyan-100/80">DICOM backend rendering plugs in here</p>
               </div>
             </div>
@@ -703,7 +862,6 @@ function ViewerWorkspace({
 type DecisionPanelProps = {
   study: Study;
   llmStatus: LlmStatus;
-  canRunReport: boolean;
   onRunReport: () => void;
   onAccept: () => void;
   onNeedsReview: () => void;
@@ -712,7 +870,6 @@ type DecisionPanelProps = {
 function DecisionPanel({
   study,
   llmStatus,
-  canRunReport,
   onRunReport,
   onAccept,
   onNeedsReview,
@@ -722,14 +879,13 @@ function DecisionPanel({
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
         <ActionCard
           icon={study.status === "reporting" ? Loader2 : Sparkles}
-          title="Qwen VL Report"
+          title="Medgemma Report"
           actionLabel={study.status === "reporting" ? "Generating" : "Generate"}
           loading={study.status === "reporting"}
-          disabled={!canRunReport}
           onAction={onRunReport}
         >
-          <p className={`mb-3 text-xs font-medium ${llmStatus.nebius_configured ? "text-emerald-300" : "text-amber-300"}`}>
-            {llmStatus.nebius_configured ? `Backend model ready: ${llmStatus.model}` : "Backend is in mock mode. Add NEBIUS_API_KEY to backend/.env and restart the backend."}
+          <p className={`mb-3 text-xs font-medium ${llmStatus.medgemma_configured ? "text-emerald-300" : "text-amber-300"}`}>
+            {llmStatus.medgemma_configured ? `Backend model ready: ${llmStatus.model}` : "Backend is in mock mode. Ensure Medgemma is running on http://127.0.0.1:1234 and restart the backend."}
           </p>
           <p className="text-sm leading-6 text-slate-300">{study.report.summary}</p>
           <div className="mt-3">
@@ -753,6 +909,29 @@ function DecisionPanel({
           {study.report.recommendation}
         </ReportSection>
 
+        <article className="rounded-md border border-slate-800 bg-[#0c1420] p-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-white">Segmentation Masks</h3>
+            <span className="text-xs text-slate-500">{study.segmentations.length}</span>
+          </div>
+          <div className="mt-3 space-y-2">
+            {study.segmentations.length === 0 ? (
+              <p className="text-sm leading-6 text-slate-400">No Medgemma mask yet. Drag on the image to choose an ROI, or run Medgemma Seg from the top control.</p>
+            ) : (
+              study.segmentations.map((segmentation) => (
+                <div key={segmentation.id} className="rounded-md border border-slate-800 bg-slate-950/45 px-3 py-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-sm font-medium text-slate-100">{segmentation.label}</span>
+                    <span className="text-xs text-cyan-200">{Math.round(segmentation.confidence * 100)}%</span>
+                  </div>
+                  <p className="mt-1 text-xs text-slate-500">
+                    {segmentation.volumeMl} ml • {segmentation.source}
+                  </p>
+                </div>
+              ))
+            )}
+          </div>
+        </article>
       </div>
 
       <div className="grid shrink-0 gap-3 border-t border-slate-800 bg-[#090f18] p-4">
@@ -847,26 +1026,16 @@ function ViewportOverlay({ study, windowLevel }: { study: Study; windowLevel: st
   );
 }
 
-function SegmentationOverlay({ segmentations, zoom }: { segmentations: Segmentation[]; zoom: number }) {
+function SegmentationOverlay({ segmentations }: { segmentations: Segmentation[] }) {
   return (
     <>
       {segmentations.map((segmentation, index) => (
-        segmentation.overlayUrl ? (
-          <img
-            key={`${segmentation.id}-${index}`}
-            className="pointer-events-none absolute inset-0 h-full w-full object-contain transition-transform duration-200"
-            src={segmentation.overlayUrl}
-            alt={`Segmentation overlay ${index + 1}`}
-            style={{ transform: `scale(${zoom / 100})` }}
-          />
-        ) : (
-          <RoiBoxOverlay
-            key={`${segmentation.id}-${index}`}
-            box={segmentation.box}
-            label={`${segmentation.source === "medsam2" ? "MedSAM2" : "Local"} mask ${index + 1}`}
-            className="border-cyan-300/90 bg-cyan-300/10 shadow-[0_0_30px_rgba(103,232,249,0.35)]"
-          />
-        )
+        <RoiBoxOverlay
+          key={segmentation.id}
+          box={segmentation.box}
+          label={`${segmentation.source === "medgemma" ? "Medgemma" : "Local"} mask ${index + 1}`}
+          className="border-cyan-300/90 bg-cyan-300/10 shadow-[0_0_30px_rgba(103,232,249,0.35)]"
+        />
       ))}
     </>
   );
@@ -875,7 +1044,7 @@ function SegmentationOverlay({ segmentations, zoom }: { segmentations: Segmentat
 function RoiBoxOverlay({ box, label, className }: { box: RoiBox; label: string; className: string }) {
   return (
     <div
-      className={`pointer-events-none absolute border-2 ${className}`}
+      className={`pointer-events-none absolute rounded-[42%] border-2 ${className}`}
       style={{
         left: `${box.x * 100}%`,
         top: `${box.y * 100}%`,
@@ -883,14 +1052,8 @@ function RoiBoxOverlay({ box, label, className }: { box: RoiBox; label: string; 
         height: `${box.height * 100}%`,
       }}
     >
-      <div className="absolute inset-0 border border-white/25" />
-
-      <span className="absolute -left-1 -top-1 h-2.5 w-2.5 rounded-full border border-white/80 bg-cyan-300/95 shadow-[0_0_12px_rgba(34,211,238,0.7)]" />
-      <span className="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full border border-white/80 bg-cyan-300/95 shadow-[0_0_12px_rgba(34,211,238,0.7)]" />
-      <span className="absolute -bottom-1 -left-1 h-2.5 w-2.5 rounded-full border border-white/80 bg-cyan-300/95 shadow-[0_0_12px_rgba(34,211,238,0.7)]" />
-      <span className="absolute -bottom-1 -right-1 h-2.5 w-2.5 rounded-full border border-white/80 bg-cyan-300/95 shadow-[0_0_12px_rgba(34,211,238,0.7)]" />
-
-      <span className="absolute left-2 top-2 whitespace-nowrap rounded-sm border border-cyan-300/45 bg-[#041724]/90 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-cyan-100">
+      <div className="absolute inset-[12%] rounded-[48%] border border-white/35 bg-white/5" />
+      <span className="absolute -right-3 top-2 translate-x-full whitespace-nowrap rounded border border-cyan-300/40 bg-cyan-950/85 px-2 py-1 text-[11px] font-medium text-cyan-50">
         {label}
       </span>
     </div>
@@ -929,23 +1092,18 @@ function ToolbarButton({
   icon: Icon,
   label,
   loading,
-  disabled,
-  title,
   onClick,
 }: {
   icon: typeof Upload;
   label: string;
   loading?: boolean;
-  disabled?: boolean;
-  title?: string;
   onClick: () => void;
 }) {
   return (
     <button
       className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-700 bg-slate-950 px-3 text-sm font-medium text-slate-200 transition hover:border-cyan-300/50 hover:text-cyan-100 disabled:cursor-wait disabled:opacity-70"
       type="button"
-      disabled={loading || disabled}
-      title={title}
+      disabled={loading}
       onClick={onClick}
     >
       <Icon className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
@@ -959,7 +1117,6 @@ function ActionCard({
   title,
   actionLabel,
   loading,
-  disabled,
   children,
   onAction,
 }: {
@@ -967,7 +1124,6 @@ function ActionCard({
   title: string;
   actionLabel: string;
   loading?: boolean;
-  disabled?: boolean;
   children: ReactNode;
   onAction: () => void;
 }) {
@@ -983,7 +1139,7 @@ function ActionCard({
         <button
           className="rounded-md border border-cyan-400/25 bg-cyan-400/10 px-3 py-1.5 text-xs font-semibold text-cyan-100 transition hover:bg-cyan-400/15 disabled:cursor-wait disabled:opacity-70"
           type="button"
-          disabled={loading || disabled}
+          disabled={loading}
           onClick={onAction}
         >
           {actionLabel}
