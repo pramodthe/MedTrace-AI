@@ -1,0 +1,50 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Secrets and local env (never commit keys)
+.env
+.env.local
+.env.*.local
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Jupyter / tooling
+.ipynb_checkpoints/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Streamlit (if you add secrets locally)
+.streamlit/secrets.toml
+
+# Local clinical notes / uploads under data/ (keep .gitkeep only)
+data/**/*.txt
+data/**/*.pdf
+data/**/*.png
+data/**/*.jpg
+data/**/*.jpeg
+
+# Cursor (optional local rules; remove line if you want to commit .cursor rules)
+.cursor/
