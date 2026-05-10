@@ -1,5 +1,5 @@
 """
-Streamlit demo: LangChain + Nebius Token Factory chat with Zep long-term memory,
+Streamlit demo: LangChain + Fireworks AI chat with Zep long-term memory,
 clinical ontology, PDF medical-history ingest, and graph inspector.
 
 Run from repo root. Prefer ``pip install -e .`` so all tools see the package; the
@@ -9,7 +9,7 @@ app also prepends ``src/`` to ``sys.path`` so ``streamlit run`` works from a cle
 
     streamlit run apps/streamlit_app.py
 
-Environment: copy ``.env.example`` to ``.env`` and set NEBIUS_API_KEY and ZEP_API_KEY.
+Environment: copy ``.env.example`` to ``.env`` and set FIREWORKS_API_KEY and ZEP_API_KEY.
 """
 
 from __future__ import annotations
@@ -19,20 +19,31 @@ from pathlib import Path
 
 # Repo layout: .../<repo>/apps/streamlit_app.py → add .../<repo>/src for imports when
 # ``pip install -e .`` was not run (Streamlit does not use pytest's pythonpath).
-_SRC = Path(__file__).resolve().parents[1] / "src"
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+_SRC = _REPO_ROOT / "src"
 if _SRC.is_dir():
     _src_s = str(_SRC)
     if _src_s not in sys.path:
         sys.path.insert(0, _src_s)
 
+import json
 import os
 import uuid
 from datetime import datetime, timezone
 from typing import Literal
 
+from pydantic import ValidationError
+
 from dotenv import load_dotenv
 
-load_dotenv()
+# ``override=True``: otherwise a shell-exported FIREWORKS_MODEL (e.g. from an old session) wins over ``.env``.
+load_dotenv(_REPO_ROOT / ".env", override=True)
+load_dotenv(_REPO_ROOT / ".env.local", override=True)
+
+# Langtrace must run before LangChain / LangGraph / Deep Agents (SDK requirement).
+from medtrace_agent.tracing import init_langtrace, langtrace_active
+
+init_langtrace()
 
 import streamlit as st
 
@@ -46,7 +57,7 @@ from medtrace_agent.ingest.documents import (
     list_txt_files_in_note_folder,
     pdf_bytes_to_text,
 )
-from medtrace_agent.integrations.pubmed import pubmed_search_summaries
+from medtrace_agent.fireworks_config import fireworks_chat_model
 from medtrace_agent.ontology.clinical import (
     ONTOLOGY_EDGE_TYPES,
     ONTOLOGY_NODE_LABELS,
@@ -57,6 +68,21 @@ from medtrace_agent.zep.graph import (
     list_recent_episodes,
     search_ontology_edges,
     search_ontology_nodes,
+)
+from medtrace_agent.insforge_api import (
+    document_row_to_ingested_doc,
+    fetch_documents_registry,
+    insforge_persistence_enabled,
+    persist_ingest_with_upload,
+    upsert_chat_session_row,
+    ensure_chart_subject_id,
+)
+from medtrace_agent.patient_json import (
+    default_patient_example,
+    format_validation_error,
+    parse_patient_json,
+    patient_json_schema,
+    patient_metadata_blob,
 )
 from medtrace_agent.zep.memory import append_turn, ensure_session, ensure_user, fetch_thread_context
 
@@ -109,6 +135,29 @@ def _init_state() -> None:
         st.session_state.edge_cursor = None
     if "ingested_docs" not in st.session_state:
         st.session_state.ingested_docs = []
+    if "insforge_registry_hydrated" not in st.session_state:
+        st.session_state.insforge_registry_hydrated = False
+    if "patient_json_metadata" not in st.session_state:
+        st.session_state.patient_json_metadata = {}
+    if "patient_json_ta" not in st.session_state:
+        st.session_state.patient_json_ta = json.dumps(default_patient_example(), indent=2)
+    if "clinical_ontology_auto_attempted" not in st.session_state:
+        st.session_state.clinical_ontology_auto_attempted = False
+
+
+def _maybe_hydrate_insforge_registry() -> None:
+    """Load document registry from InsForge once per Streamlit session when configured."""
+    if st.session_state.insforge_registry_hydrated:
+        return
+    if not insforge_persistence_enabled():
+        st.session_state.insforge_registry_hydrated = True
+        return
+    try:
+        rows = fetch_documents_registry(chart_subject_id=None)
+        st.session_state.ingested_docs = [document_row_to_ingested_doc(r) for r in rows]
+    except Exception as exc:
+        st.session_state["_insforge_err"] = f"InsForge registry load: {exc}"
+    st.session_state.insforge_registry_hydrated = True
 
 
 def _format_document_catalog(docs: list) -> str:
@@ -141,6 +190,11 @@ def _ingest_all_txt_from_data_folder(
                 doc_id=doc_id,
             )
             uploaded_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+            doc_kind = (
+                "radiology_note"
+                if note_source == "radiology_note"
+                else "conversation_note"
+            )
             st.session_state.ingested_docs.append(
                 {
                     "doc_id": doc_id,
@@ -150,6 +204,20 @@ def _ingest_all_txt_from_data_folder(
                     "ingest_kind": note_source,
                 }
             )
+            if insforge_persistence_enabled():
+                try:
+                    persist_ingest_with_upload(
+                        file_bytes=path.read_bytes(),
+                        filename=path.name,
+                        doc_id=doc_id,
+                        zep_user_id=st.session_state.zep_user_id,
+                        patient_display_name=st.session_state.zep_display_name,
+                        document_kind=doc_kind,
+                        extract_mode=None,
+                        episode_count=len(ids),
+                    )
+                except Exception as exc:
+                    st.session_state["_insforge_err"] = f"InsForge upload/registry: {exc}"
             ok_parts.append(f"{path.name} ({len(ids)} episodes, doc_id={doc_id[:8]}…)")
         except Exception as exc:
             err_parts.append(f"{path.name}: {exc}")
@@ -159,38 +227,81 @@ def _ingest_all_txt_from_data_folder(
 def _bootstrap_zep() -> None:
     ensure_user(st.session_state.zep_user_id, st.session_state.zep_display_name)
     ensure_session(st.session_state.thread_id, st.session_state.zep_user_id)
+    if insforge_persistence_enabled():
+        try:
+            meta = st.session_state.get("patient_json_metadata") or {}
+            cid = ensure_chart_subject_id(
+                zep_user_id=st.session_state.zep_user_id,
+                display_name=st.session_state.zep_display_name,
+                metadata=meta if isinstance(meta, dict) else {},
+            )
+            upsert_chat_session_row(
+                zep_thread_id=st.session_state.thread_id,
+                chart_subject_id=cid,
+                title=None,
+            )
+        except Exception as exc:
+            st.session_state["_insforge_err"] = f"InsForge session sync: {exc}"
+
+
+def _ensure_clinical_ontology_session() -> None:
+    """Apply project-wide Zep ontology once per browser session when enabled (see AUTO_APPLY_ZEP_ONTOLOGY)."""
+    if st.session_state.clinical_ontology_auto_attempted:
+        return
+    flag = (os.environ.get("AUTO_APPLY_ZEP_ONTOLOGY") or "true").strip().lower()
+    if flag in ("0", "false", "no", "off"):
+        st.session_state.clinical_ontology_auto_attempted = True
+        return
+    try:
+        apply_clinical_ontology()
+        st.session_state["_ontology_ok"] = (
+            "Clinical ontology applied automatically (project-wide). "
+            "Check Zep dashboard → User ontology."
+        )
+    except Exception as exc:
+        st.session_state["_ontology_err"] = str(exc)
+    finally:
+        st.session_state.clinical_ontology_auto_attempted = True
+
+
+def _render_status_messages() -> None:
+    """Single container for transient banners from the previous interaction or startup."""
+    with st.container():
+        ingest_err = st.session_state.pop("_zep_ingest_err", None)
+        if ingest_err:
+            st.warning(ingest_err)
+        onto_ok = st.session_state.pop("_ontology_ok", None)
+        if onto_ok:
+            st.success(onto_ok)
+        onto_err = st.session_state.pop("_ontology_err", None)
+        if onto_err:
+            st.error(f"Ontology: {onto_err}")
+        insforge_err = st.session_state.pop("_insforge_err", None)
+        if insforge_err:
+            st.warning(f"InsForge: {insforge_err}")
+        pdf_ok = st.session_state.pop("_pdf_ok", None)
+        if pdf_ok:
+            st.success(pdf_ok)
+        pdf_err = st.session_state.pop("_pdf_err", None)
+        if pdf_err:
+            st.error(pdf_err)
+        notes_ok = st.session_state.pop("_notes_ok", None)
+        if notes_ok:
+            st.success(notes_ok)
+        notes_err = st.session_state.pop("_notes_err", None)
+        if notes_err:
+            st.error(notes_err)
 
 
 def main() -> None:
     st.set_page_config(page_title="Zep clinical memory demo", layout="wide")
     _init_state()
-
-    ingest_err = st.session_state.pop("_zep_ingest_err", None)
-    if ingest_err:
-        st.warning(ingest_err)
-    onto_ok = st.session_state.pop("_ontology_ok", None)
-    if onto_ok:
-        st.success(onto_ok)
-    onto_err = st.session_state.pop("_ontology_err", None)
-    if onto_err:
-        st.error(f"Ontology: {onto_err}")
-    pdf_ok = st.session_state.pop("_pdf_ok", None)
-    if pdf_ok:
-        st.success(pdf_ok)
-    pdf_err = st.session_state.pop("_pdf_err", None)
-    if pdf_err:
-        st.error(pdf_err)
-    notes_ok = st.session_state.pop("_notes_ok", None)
-    if notes_ok:
-        st.success(notes_ok)
-    notes_err = st.session_state.pop("_notes_err", None)
-    if notes_err:
-        st.error(notes_err)
+    _maybe_hydrate_insforge_registry()
 
     missing = [
         name
         for name, ok in (
-            ("NEBIUS_API_KEY", bool(os.environ.get("NEBIUS_API_KEY"))),
+            ("FIREWORKS_API_KEY", bool(os.environ.get("FIREWORKS_API_KEY"))),
             ("ZEP_API_KEY", bool(os.environ.get("ZEP_API_KEY"))),
         )
         if not ok
@@ -199,264 +310,354 @@ def main() -> None:
         st.error(f"Missing environment variables: {', '.join(missing)}. Copy `.env.example` to `.env`.")
         st.stop()
 
+    _ensure_clinical_ontology_session()
+    _render_status_messages()
+
     st.warning(
         "**Educational demo only.** Not for real PHI or HIPAA-regulated production use. "
         "Do not upload sensitive patient data."
     )
 
-    st.title("Zep clinical memory + Nebius (LangChain)")
-    st.markdown(
-        """
-        **Patient** is the Zep **`user_id`** (knowledge graph owner). Doctors can **upload one or more PDFs**
-        into that patient's graph (`graph.add` text chunks with a stable **doc_id** per file). **Default ingest** renders each PDF page to an image and runs a **vision model** (`NEBIUS_VL_MODEL`) to extract structured fields plus a full-page transcript (scans, handwriting, embedded figures). Optional **Skip VLM** uses fast **pypdf** text only. **Apply the clinical ontology**
-        for typed extraction, then **chat**—the assistant is instructed to **cite filename and/or doc_id** when answering from uploads.
-        Context still comes from `thread.get_user_context`. Use **Ontology search** after ingestion catches up; refresh episodes/edges to watch processing.
-        """
+    st.title("Zep clinical memory + Fireworks AI (LangChain)")
+    st.caption(
+        "PDF + chat → Zep graph; optional Deep Agent uses Zep tools and **PubMed** (`pubmed_search_literature`) "
+        "to synthesize answers."
     )
+    with st.expander("How this demo works", expanded=False):
+        st.markdown(
+            """
+            **Patient** is the Zep **`user_id`** (knowledge graph owner). Upload **PDFs** into that patient's graph
+            (`graph.add` text chunks with a stable **doc_id**). **Default ingest** renders each page to PNG and calls
+            **Fireworks** (`FIREWORKS_VL_MODEL`) for structured fields + transcript; **Skip VLM** uses **pypdf** only.
+
+            The **clinical ontology** is registered **project-wide** in Zep (once per session by default via
+            `AUTO_APPLY_ZEP_ONTOLOGY`) so typed extraction can align with dashboard ontology views.
+
+            **Chat:** fast RAG path or **Clinical reasoning (Deep Agent)** — Zep tools plus **PubMed** only through
+            the agent tool (no separate sidebar tester). Use sample prompt **Deep — PubMed literature** to exercise it.
+
+            Answers from uploads should **cite doc_id / filename**. Context comes from `thread.get_user_context`.
+            Use the graph inspector **Ontology search** after ingestion catches up.
+            """
+        )
 
     with st.sidebar:
-        st.header("Settings")
-        default_model = os.environ.get(
-            "NEBIUS_MODEL", "nvidia/Nemotron-3-Nano-Omni"
-        )
-        model_name = st.text_input("LLM model (Nebius)", value=default_model)
+        st.header("Workspace")
 
-        clinical_deep_agent = st.checkbox(
-            "Clinical reasoning (Deep Agent)",
-            value=False,
-            help=(
-                "LangChain Deep Agent with Zep tools (episodes, edges, ontology) + PubMed search tool. "
-                "PubMed uses the official NCBI API (not web scraping). Results appear in chat only when "
-                "the model calls that tool — try asking explicitly: “Search PubMed for …”. "
-                "Slower; demo only, not diagnostic."
-            ),
-        )
-        st.caption(
-            "Without this checkbox, chat uses the fast path (no PubMed). "
-            "Use **PubMed (NCBI API)** below to verify literature fetch works."
-        )
-
-        with st.expander("PubMed (NCBI API) — sample fetch", expanded=False):
-            st.markdown(
-                "Data comes from **NCBI E-utilities** (`esearch` + `esummary`), not scraped HTML. "
-                "Optional: set `NCBI_EMAIL` / `NCBI_API_KEY` in `.env`."
-            )
-            pm_q = st.text_input("PubMed query", value="diabetes mellitus", key="pubmed_test_query")
-            if st.button("Run sample PubMed fetch", key="pubmed_test_btn"):
-                with st.spinner("Calling NCBI…"):
-                    try:
-                        sample_out = pubmed_search_summaries(pm_q.strip() or "diabetes", max_results=4)
-                        st.markdown(sample_out)
-                        if sample_out.startswith("PubMed esearch failed") or sample_out.startswith(
-                            "PubMed esummary failed"
-                        ):
-                            st.error("NCBI request failed — check network or `.env` API key.")
-                    except Exception as exc:
-                        st.exception(exc)
-
-        st.session_state.zep_user_id = st.text_input(
-            "Patient Zep user id",
-            value=st.session_state.zep_user_id,
-            help="Zep User id = patient chart subject for graph + PDF ingest.",
-        )
-        st.session_state.zep_display_name = st.text_input(
-            "Display name (chat / graph hints)",
-            value=st.session_state.zep_display_name,
-        )
-
-        st.divider()
-        st.header("Clinical ontology")
-        st.caption(
-            "Registers ≤10 custom entities + edges **project-wide** (matches Zep dashboard). "
-            "This is **not** scoped to the patient id below—it affects your whole Zep project. "
-            "See Zep docs."
-        )
-        if st.button("Apply clinical ontology (project-wide)"):
-            try:
-                apply_clinical_ontology()
-                st.session_state["_ontology_ok"] = (
-                    "Clinical ontology applied (project-wide). Check Zep dashboard → User ontology."
-                )
-            except Exception as exc:
-                st.session_state["_ontology_err"] = str(exc)
-            st.rerun()
-
-        st.divider()
-        st.header("Patient documents (PDF)")
-        default_max_pages = int(os.environ.get("PDF_VL_MAX_PAGES", "25"))
-        default_dpi = int(os.environ.get("PDF_VL_DPI", "150"))
-        with st.expander("PDF ingest options", expanded=False):
-            skip_vlm = st.checkbox(
-                "Skip VLM — text layer only (pypdf)",
-                value=False,
-                help="Faster and cheaper for born-digital PDFs. Misses scanned pages, handwriting, and text inside embedded images.",
-            )
-            max_pdf_pages = st.number_input(
-                "Max pages per PDF (vision path)",
-                min_value=1,
-                max_value=200,
-                value=min(default_max_pages, 200),
-                help="Caps cost/latency; raise PDF_VL_MAX_PAGES in .env for a different default.",
-            )
-            render_dpi = st.slider(
-                "Render DPI (vision path)",
-                min_value=96,
-                max_value=220,
-                value=min(max(default_dpi, 96), 220),
-                help="Higher DPI improves small text; increases image size and API cost.",
-            )
-
-        pdf_files = st.file_uploader(
-            "Medical history PDF(s)",
-            type=["pdf"],
-            accept_multiple_files=True,
-            help="Default: each page is rendered to PNG and sent to NEBIUS_VL_MODEL. Use Skip VLM for text-layer-only extraction.",
-        )
-        if st.button(
-            "Ingest PDF(s) into patient graph",
-            disabled=not pdf_files,
-        ):
-            if not skip_vlm and not (os.environ.get("NEBIUS_VL_MODEL") or "").strip():
-                st.session_state["_pdf_err"] = (
-                    "Vision ingest requires NEBIUS_VL_MODEL in .env (any OpenAI-compatible vision model on your Nebius base URL), "
-                    "or enable “Skip VLM” for pypdf-only."
-                )
-                st.rerun()
+        with st.expander("Connection & models", expanded=True):
+            if langtrace_active():
+                st.caption("Langtrace ON — LLM / LangChain / Deep Agent traces export when enabled.")
+            elif (os.environ.get("LANGTRACE_API_KEY") or "").strip():
+                st.caption("Langtrace key set but SDK did not initialize — check install/logs.")
             else:
-                file_list = pdf_files if isinstance(pdf_files, list) else [pdf_files]
-                ok_parts: list[str] = []
-                err_parts: list[str] = []
-                for pf in file_list:
-                    doc_id = uuid.uuid4().hex
+                st.caption(
+                    "Langtrace OFF — set `LANGTRACE_API_KEY` (see `.env.example`) for traces."
+                )
+            if insforge_persistence_enabled():
+                st.success("InsForge persistence ON (documents → Storage + DB).")
+                if st.button("Reload document list from InsForge"):
+                    st.session_state.insforge_registry_hydrated = False
+                    st.rerun()
+            else:
+                st.caption(
+                    "InsForge persistence OFF — add INSFORGE_URL, INSFORGE_API_KEY, INSFORGE_PROFILE_ID "
+                    "(see `.env.example`)."
+                )
+            env_chat_model = fireworks_chat_model()
+            with st.expander("Advanced: session-only chat model override", expanded=False):
+                st.caption(
+                    "Leave empty to use **`FIREWORKS_MODEL`** from the repo **`.env`** (loaded with priority "
+                    "over shell exports)."
+                )
+                if st.button("Clear session model override", key="btn_clear_fireworks_chat_override"):
+                    st.session_state.pop("fireworks_chat_model_session_override", None)
+                    st.rerun()
+                session_chat_override = (
+                    st.text_input(
+                        "Fireworks chat model id (optional)",
+                        value="",
+                        key="fireworks_chat_model_session_override",
+                        placeholder=env_chat_model,
+                        help="Temporary override for this browser session only.",
+                    )
+                    or ""
+                ).strip()
+            model_name = session_chat_override or env_chat_model
+            st.caption(f"**Active chat model:** `{model_name}`")
+
+            clinical_deep_agent = st.checkbox(
+                "Clinical reasoning (Deep Agent)",
+                value=False,
+                help=(
+                    "Deep Agent with Zep tools (episodes, edges, ontology search) and **PubMed** via the "
+                    "`pubmed_search_literature` tool (NCBI E-utilities). The model searches literature and "
+                    "synthesizes with graph context — educational demo only, not diagnostic."
+                ),
+            )
+            st.caption(
+                "When off, chat uses the fast RAG path (no PubMed tool). "
+                "Turn on for literature + graph synthesis; try sample prompt **Deep — PubMed literature**."
+            )
+
+        with st.expander("Patient", expanded=True):
+            st.caption(
+                "Define the active **patient** as JSON (Zep `user_id` + labels + demo metadata). "
+                "Educational demo only — no PHI."
+            )
+            with st.expander("JSON Schema (reference)", expanded=False):
+                st.code(json.dumps(patient_json_schema(), indent=2), language="json")
+            st.text_area(
+                "Patient JSON",
+                key="patient_json_ta",
+                height=220,
+                help="Must match the schema above. Required key: zep_user_id.",
+            )
+            b_apply_json, b_reset_json = st.columns(2)
+            with b_apply_json:
+                if st.button("Apply patient JSON", key="btn_apply_patient_json"):
+                    raw = (st.session_state.get("patient_json_ta") or "").strip()
                     try:
-                        raw = pf.getvalue()
-                        extract_mode = "pypdf" if skip_vlm else "vlm_png"
-
-                        if skip_vlm:
-                            text = pdf_bytes_to_text(raw, use_vlm=False)
-                        else:
-                            status_lbl = f"Vision extract: {pf.name}"
-                            with st.status(status_lbl) as status:
-
-                                def _progress(cur: int, total: int) -> None:
-                                    status.update(label=f"{pf.name}: VLM page {cur}/{total}")
-
-                                text = pdf_bytes_to_text(
-                                    raw,
-                                    use_vlm=True,
-                                    dpi=render_dpi,
-                                    max_pages=int(max_pdf_pages),
-                                    progress_cb=_progress,
-                                )
-                                status.update(label=f"{pf.name}: done → Zep ingest")
-
-                        ids = ingest_pdf_text_to_patient_graph(
-                            st.session_state.zep_user_id,
-                            text,
-                            filename=pf.name,
-                            doc_id=doc_id,
-                            extra_metadata={"extract_mode": extract_mode},
+                        rec = parse_patient_json(raw)
+                    except json.JSONDecodeError as exc:
+                        st.session_state["_patient_json_err"] = f"Invalid JSON: {exc}"
+                    except ValidationError as exc:
+                        st.session_state["_patient_json_err"] = format_validation_error(exc)
+                    else:
+                        st.session_state.zep_user_id = rec.zep_user_id.strip()
+                        st.session_state.zep_display_name = (rec.display_name or "").strip()
+                        st.session_state.patient_json_metadata = patient_metadata_blob(rec)
+                        st.session_state["_patient_json_ok"] = (
+                            f"Patient set: `{rec.zep_user_id}` — **{rec.display_name or '(no name)'}**"
                         )
-                        uploaded_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-                        st.session_state.ingested_docs.append(
-                            {
-                                "doc_id": doc_id,
-                                "filename": pf.name,
-                                "uploaded_at_utc": uploaded_at,
-                                "episode_count": len(ids),
-                                "ingest_kind": "pdf",
-                            }
-                        )
-                        ok_parts.append(f"{pf.name} ({len(ids)} episodes, doc_id={doc_id[:8]}…)")
-                    except Exception as exc:
-                        err_parts.append(f"{pf.name}: {exc}")
-                if ok_parts:
-                    st.session_state["_pdf_ok"] = (
-                        "Ingested: "
-                        + "; ".join(ok_parts)
-                        + " — refresh graph after Zep processes."
-                    )
-                if err_parts:
-                    st.session_state["_pdf_err"] = "Failed: " + "; ".join(err_parts)
-            st.rerun()
+                    st.rerun()
+            with b_reset_json:
+                if st.button("Reset to example JSON", key="btn_reset_patient_json"):
+                    st.session_state.patient_json_ta = json.dumps(default_patient_example(), indent=2)
+                    st.rerun()
 
-        st.divider()
-        st.header("Plain text notes (`data/`)")
-        st.caption(
-            "Drop ``.txt`` files into ``data/radiology_note/`` or ``data/session_note/`` "
-            "(repo-relative). Each file is chunked then sent to Zep via ``graph.add``."
-        )
-        rad_note_paths = list_txt_files_in_note_folder("radiology_note")
-        sess_note_paths = list_txt_files_in_note_folder("session_note")
-        st.text(
-            f"radiology_note: {len(rad_note_paths)} .txt   |   session_note: {len(sess_note_paths)} .txt"
-        )
-        if rad_note_paths:
-            with st.expander("radiology_note files", expanded=False):
-                for p in rad_note_paths:
-                    st.markdown(f"- `{p.name}`")
-        if sess_note_paths:
-            with st.expander("session_note files", expanded=False):
-                for p in sess_note_paths:
-                    st.markdown(f"- `{p.name}`")
+            p_ok = st.session_state.pop("_patient_json_ok", None)
+            if p_ok:
+                st.success(p_ok)
+            p_err = st.session_state.pop("_patient_json_err", None)
+            if p_err:
+                st.error(p_err)
 
-        cnote_a, cnote_b = st.columns(2)
-        with cnote_a:
-            if st.button(
-                "Ingest radiology_note/*.txt",
-                disabled=len(rad_note_paths) == 0,
-                help="Reads every .txt in data/radiology_note/, runs chunk_for_zep, graph.add.",
-            ):
-                ok_n, err_n = _ingest_all_txt_from_data_folder("radiology_note")
-                if ok_n:
-                    st.session_state["_notes_ok"] = (
-                        "Radiology notes ingested: "
-                        + "; ".join(ok_n)
-                        + " — refresh graph after Zep processes."
+            st.session_state.zep_user_id = st.text_input(
+                "Patient Zep user id",
+                value=st.session_state.zep_user_id,
+                help="Zep User id = patient chart subject for graph + PDF ingest.",
+            )
+            st.session_state.zep_display_name = st.text_input(
+                "Display name (chat / graph hints)",
+                value=st.session_state.zep_display_name,
+            )
+
+        with st.expander("Zep ontology", expanded=False):
+            st.caption(
+                "Registers custom entities + edges **project-wide** (matches Zep dashboard). "
+                "Not scoped to the patient id — affects the whole Zep project. "
+                "On startup the app applies this once when `AUTO_APPLY_ZEP_ONTOLOGY` is true (see `.env.example`)."
+            )
+            if st.button("Re-apply clinical ontology (project-wide)"):
+                try:
+                    apply_clinical_ontology()
+                    st.session_state["_ontology_ok"] = (
+                        "Clinical ontology re-applied (project-wide). Check Zep dashboard → User ontology."
                     )
-                if err_n:
-                    st.session_state["_notes_err"] = "Radiology notes failed: " + "; ".join(err_n)
-                st.rerun()
-        with cnote_b:
-            if st.button(
-                "Ingest session_note/*.txt",
-                disabled=len(sess_note_paths) == 0,
-                help="Reads every .txt in data/session_note/, runs chunk_for_zep, graph.add.",
-            ):
-                ok_n, err_n = _ingest_all_txt_from_data_folder("session_note")
-                if ok_n:
-                    st.session_state["_notes_ok"] = (
-                        "Session notes ingested: "
-                        + "; ".join(ok_n)
-                        + " — refresh graph after Zep processes."
-                    )
-                if err_n:
-                    st.session_state["_notes_err"] = "Session notes failed: " + "; ".join(err_n)
+                except Exception as exc:
+                    st.session_state["_ontology_err"] = str(exc)
                 st.rerun()
 
-        if st.session_state.ingested_docs:
-            st.caption(f"{len(st.session_state.ingested_docs)} document(s) in session registry.")
-            with st.expander("Ingested documents (doc_id / filename)", expanded=False):
-                for d in reversed(st.session_state.ingested_docs):
-                    kind = d.get("ingest_kind", "pdf")
-                    st.markdown(
-                        f"- `{d['doc_id']}` — **{d['filename']}** (`{kind}`) — {d['uploaded_at_utc']} "
-                        f"— {d['episode_count']} episode(s)"
+        with st.expander("Ingest", expanded=True):
+            st.subheader("Patient documents (PDF)")
+            default_max_pages = int(os.environ.get("PDF_VL_MAX_PAGES", "25"))
+            default_dpi = int(os.environ.get("PDF_VL_DPI", "150"))
+            with st.expander("PDF ingest options", expanded=False):
+                skip_vlm = st.checkbox(
+                    "Skip VLM — text layer only (pypdf)",
+                    value=False,
+                    help="Faster and cheaper for born-digital PDFs. Misses scanned pages, handwriting, and text inside embedded images.",
+                )
+                max_pdf_pages = st.number_input(
+                    "Max pages per PDF (vision path)",
+                    min_value=1,
+                    max_value=200,
+                    value=min(default_max_pages, 200),
+                    help="Caps cost/latency; raise PDF_VL_MAX_PAGES in .env for a different default.",
+                )
+                render_dpi = st.slider(
+                    "Render DPI (vision path)",
+                    min_value=96,
+                    max_value=220,
+                    value=min(max(default_dpi, 96), 220),
+                    help="Higher DPI improves small text; increases image size and API cost.",
+                )
+
+            pdf_files = st.file_uploader(
+                "Medical history PDF(s)",
+                type=["pdf"],
+                accept_multiple_files=True,
+                help="Default: each page is rendered to PNG and sent to Fireworks (FIREWORKS_VL_MODEL). Use Skip VLM for text-layer-only extraction.",
+            )
+            if st.button(
+                "Ingest PDF(s) into patient graph",
+                disabled=not pdf_files,
+            ):
+                if not skip_vlm and not (os.environ.get("FIREWORKS_API_KEY") or "").strip():
+                    st.session_state["_pdf_err"] = (
+                        "Vision ingest requires FIREWORKS_API_KEY in .env (Fireworks multimodal models use the same OpenAI-compatible endpoint), "
+                        "or enable “Skip VLM” for pypdf-only."
                     )
+                    st.rerun()
+                else:
+                    file_list = pdf_files if isinstance(pdf_files, list) else [pdf_files]
+                    ok_parts: list[str] = []
+                    err_parts: list[str] = []
+                    for pf in file_list:
+                        doc_id = uuid.uuid4().hex
+                        try:
+                            raw = pf.getvalue()
+                            extract_mode = "pypdf" if skip_vlm else "vlm_png"
 
-        st.divider()
-        if st.button("New thread", help="New session id; same patient user (cross-thread recall)"):
-            st.session_state.thread_id = _new_thread_id()
-            st.session_state.messages = []
-            st.session_state.edge_cursor = None
-            _bootstrap_zep()
-            st.rerun()
+                            if skip_vlm:
+                                text = pdf_bytes_to_text(raw, use_vlm=False)
+                            else:
+                                status_lbl = f"Vision extract: {pf.name}"
+                                with st.status(status_lbl) as status:
 
-        if st.button("Clear local chat only"):
-            st.session_state.messages = []
-            st.rerun()
+                                    def _progress(cur: int, total: int) -> None:
+                                        status.update(label=f"{pf.name}: VLM page {cur}/{total}")
 
-        st.caption(f"Current thread id: `{st.session_state.thread_id[:12]}…`")
+                                    text = pdf_bytes_to_text(
+                                        raw,
+                                        use_vlm=True,
+                                        dpi=render_dpi,
+                                        max_pages=int(max_pdf_pages),
+                                        progress_cb=_progress,
+                                    )
+                                    status.update(label=f"{pf.name}: done → Zep ingest")
+
+                            ids = ingest_pdf_text_to_patient_graph(
+                                st.session_state.zep_user_id,
+                                text,
+                                filename=pf.name,
+                                doc_id=doc_id,
+                                extra_metadata={"extract_mode": extract_mode},
+                            )
+                            uploaded_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+                            st.session_state.ingested_docs.append(
+                                {
+                                    "doc_id": doc_id,
+                                    "filename": pf.name,
+                                    "uploaded_at_utc": uploaded_at,
+                                    "episode_count": len(ids),
+                                    "ingest_kind": "pdf",
+                                }
+                            )
+                            if insforge_persistence_enabled():
+                                try:
+                                    persist_ingest_with_upload(
+                                        file_bytes=raw,
+                                        filename=pf.name,
+                                        doc_id=doc_id,
+                                        zep_user_id=st.session_state.zep_user_id,
+                                        patient_display_name=st.session_state.zep_display_name,
+                                        document_kind="clinical_pdf",
+                                        extract_mode=extract_mode,
+                                        episode_count=len(ids),
+                                    )
+                                except Exception as exc:
+                                    st.session_state["_insforge_err"] = f"InsForge upload/registry: {exc}"
+                            ok_parts.append(f"{pf.name} ({len(ids)} episodes, doc_id={doc_id[:8]}…)")
+                        except Exception as exc:
+                            err_parts.append(f"{pf.name}: {exc}")
+                    if ok_parts:
+                        st.session_state["_pdf_ok"] = (
+                            "Ingested: "
+                            + "; ".join(ok_parts)
+                            + " — refresh graph after Zep processes."
+                        )
+                    if err_parts:
+                        st.session_state["_pdf_err"] = "Failed: " + "; ".join(err_parts)
+                st.rerun()
+
+            st.divider()
+            st.subheader("Plain text notes (`data/`)")
+            st.caption(
+                "Drop ``.txt`` files into ``data/radiology_note/`` or ``data/session_note/`` "
+                "(repo-relative). Each file is chunked then sent to Zep via ``graph.add``."
+            )
+            rad_note_paths = list_txt_files_in_note_folder("radiology_note")
+            sess_note_paths = list_txt_files_in_note_folder("session_note")
+            st.text(
+                f"radiology_note: {len(rad_note_paths)} .txt   |   session_note: {len(sess_note_paths)} .txt"
+            )
+            if rad_note_paths:
+                with st.expander("radiology_note files", expanded=False):
+                    for p in rad_note_paths:
+                        st.markdown(f"- `{p.name}`")
+            if sess_note_paths:
+                with st.expander("session_note files", expanded=False):
+                    for p in sess_note_paths:
+                        st.markdown(f"- `{p.name}`")
+
+            cnote_a, cnote_b = st.columns(2)
+            with cnote_a:
+                if st.button(
+                    "Ingest radiology_note/*.txt",
+                    disabled=len(rad_note_paths) == 0,
+                    help="Reads every .txt in data/radiology_note/, runs chunk_for_zep, graph.add.",
+                ):
+                    ok_n, err_n = _ingest_all_txt_from_data_folder("radiology_note")
+                    if ok_n:
+                        st.session_state["_notes_ok"] = (
+                            "Radiology notes ingested: "
+                            + "; ".join(ok_n)
+                            + " — refresh graph after Zep processes."
+                        )
+                    if err_n:
+                        st.session_state["_notes_err"] = "Radiology notes failed: " + "; ".join(err_n)
+                    st.rerun()
+            with cnote_b:
+                if st.button(
+                    "Ingest session_note/*.txt",
+                    disabled=len(sess_note_paths) == 0,
+                    help="Reads every .txt in data/session_note/, runs chunk_for_zep, graph.add.",
+                ):
+                    ok_n, err_n = _ingest_all_txt_from_data_folder("session_note")
+                    if ok_n:
+                        st.session_state["_notes_ok"] = (
+                            "Session notes ingested: "
+                            + "; ".join(ok_n)
+                            + " — refresh graph after Zep processes."
+                        )
+                    if err_n:
+                        st.session_state["_notes_err"] = "Session notes failed: " + "; ".join(err_n)
+                    st.rerun()
+
+            if st.session_state.ingested_docs:
+                st.caption(f"{len(st.session_state.ingested_docs)} document(s) in session registry.")
+                with st.expander("Ingested documents (doc_id / filename)", expanded=False):
+                    for d in reversed(st.session_state.ingested_docs):
+                        kind = d.get("ingest_kind", "pdf")
+                        st.markdown(
+                            f"- `{d['doc_id']}` — **{d['filename']}** (`{kind}`) — {d['uploaded_at_utc']} "
+                            f"— {d['episode_count']} episode(s)"
+                        )
+
+        with st.expander("Session", expanded=False):
+            if st.button("New thread", help="New session id; same patient user (cross-thread recall)"):
+                st.session_state.thread_id = _new_thread_id()
+                st.session_state.messages = []
+                st.session_state.edge_cursor = None
+                _bootstrap_zep()
+                st.rerun()
+
+            if st.button("Clear local chat only"):
+                st.session_state.messages = []
+                st.rerun()
+
+            st.caption(f"Current thread id: `{st.session_state.thread_id[:12]}…`")
 
     _bootstrap_zep()
 
@@ -478,12 +679,15 @@ def main() -> None:
                     )
                     st.caption(f"Reference documents (session registry): {refs}")
                 if msg["role"] == "assistant" and msg.get("deep_agent"):
-                    st.caption("Clinical reasoning: Deep Agent (Zep tools + optional PubMed)")
+                    st.caption(
+                        "Clinical reasoning: Deep Agent (Zep tools + PubMed via `pubmed_search_literature`)"
+                    )
 
         with st.expander("Sample prompts — click to send a test message", expanded=False):
             st.caption(
-                "Prompts marked **Deep** need **Clinical reasoning (Deep Agent)** enabled in the sidebar. "
-                "Others work with the fast RAG chat path."
+                "Prompts marked **Deep** need **Clinical reasoning (Deep Agent)** enabled under "
+                "**Connection & models**. PubMed runs only via the agent tool `pubmed_search_literature` "
+                "(try **Deep — PubMed literature**)."
             )
             for idx, (label, prompt_text, needs_deep) in enumerate(SAMPLE_CHAT_PROMPTS):
                 c1, c2 = st.columns((4, 1))
@@ -539,6 +743,22 @@ def main() -> None:
                     )
             except Exception as exc:
                 reply = f"Error calling the model or Zep: {exc}"
+                es = str(exc).lower()
+                if (
+                    "404" in es
+                    or "not exist" in es
+                    or "not_found" in es
+                    or "model not found" in es
+                ):
+                    reply += (
+                        "\n\n— **Fireworks:** That model id is not on your API key, or the app is still "
+                        "using a stale id. Confirm **`FIREWORKS_MODEL`** / **`FIREWORKS_VL_MODEL`** in the "
+                        "repo **`.env`**, click **Clear session model override** in the sidebar (Advanced), "
+                        "restart Streamlit, then check **Active chat model** matches `.env`. "
+                        "Pick serverless ids from [fireworks.ai/models](https://fireworks.ai/models). "
+                        "Try e.g. `llama-v3p3-70b-instruct` (chat) + `kimi-k2p5` (vision), or run "
+                        "`python scripts/fireworks_probe_models.py` from the repo root."
+                    )
                 st.session_state.last_zep_context = ""
 
             docs_snapshot = [dict(d) for d in st.session_state.ingested_docs]

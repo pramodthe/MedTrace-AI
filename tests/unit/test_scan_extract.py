@@ -60,7 +60,8 @@ def test_pdf_to_page_images_png_rejects_too_many_pages() -> None:
 
 
 def test_vl_extract_single_page_parses_llm_json(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("NEBIUS_API_KEY", "k")
+    monkeypatch.setenv("FIREWORKS_API_KEY", "k")
+    monkeypatch.setenv("FIREWORKS_VLM_API", "chat")
     payload = (
         '{"page_number":1,"document_type":null,'
         '"patient_identifiers_if_visible":[],"dates":[],"labs":[],"medications":[],'

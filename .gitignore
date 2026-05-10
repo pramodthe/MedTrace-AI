@@ -48,3 +48,18 @@ data/**/*.jpeg
 
 # Cursor (optional local rules; remove line if you want to commit .cursor rules)
 .cursor/
+
+# InsForge & AI agent skills
+.insforge
+.agent
+.agents
+.augment
+.claude
+.cline
+.github/copilot*
+.kilocode
+.qoder
+.qwen
+.roo
+.trae
+.windsurf

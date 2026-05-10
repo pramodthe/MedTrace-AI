@@ -9,7 +9,11 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from langchain_openai import ChatOpenAI
 from zep_cloud.types import Message as ZepMessage
 
-DEFAULT_NEBIUS_BASE_URL = "https://api.tokenfactory.nebius.com/v1/"
+from medtrace_agent.fireworks_config import (
+    fireworks_api_key,
+    fireworks_base_url,
+    fireworks_reasoning_effort,
+)
 
 
 BASE_SYSTEM = """You are a concise, friendly assistant in a demo app backed by Zep long-term memory.
@@ -47,7 +51,7 @@ def chat_with_memory(
     zep_context: str,
     thread_messages: Sequence[ZepMessage],
     model_name: str,
-    temperature: float = 0.3,
+    temperature: float = 0.6,
     api_key: str | None = None,
     base_url: str | None = None,
     document_catalog: str | None = None,
@@ -65,15 +69,14 @@ def chat_with_memory(
         system_parts.append("\n")
         system_parts.append(DOC_CATALOG_INSTRUCTIONS)
 
-    key = api_key or os.environ.get("NEBIUS_API_KEY")
-    if not key:
-        raise RuntimeError("NEBIUS_API_KEY is not set.")
+    key = api_key or fireworks_api_key()
 
     llm = ChatOpenAI(
         model=model_name,
         temperature=temperature,
         api_key=key,
-        base_url=(base_url or os.environ.get("NEBIUS_BASE_URL") or DEFAULT_NEBIUS_BASE_URL),
+        base_url=(base_url or fireworks_base_url()),
+        reasoning_effort=fireworks_reasoning_effort(),
     )
     lc_messages: list[BaseMessage] = [SystemMessage(content="".join(system_parts))]
     lc_messages.extend(_zep_to_lc(thread_messages))

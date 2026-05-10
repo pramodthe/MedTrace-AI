@@ -2,6 +2,19 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+_ROOT = Path(__file__).resolve().parents[1]
+load_dotenv(_ROOT / ".env", override=True)
+load_dotenv(_ROOT / ".env.local", override=True)
+
+# Langtrace before any LangChain / LangGraph agent imports.
+from medtrace_agent.tracing import init_langtrace
+
+init_langtrace()
+
 import pytest
 
 

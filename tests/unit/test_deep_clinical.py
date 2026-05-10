@@ -10,6 +10,10 @@ from langchain_core.messages import AIMessage, HumanMessage
 from medtrace_agent.agents import deep_clinical as dc
 
 
+def test_deep_clinical_system_prompt_requires_pubmed_tool() -> None:
+    assert "pubmed_search_literature" in dc.DEEP_CLINICAL_SYSTEM
+
+
 def test_clinical_tool_session_restores_defaults() -> None:
     with dc.clinical_tool_session("u99", "t88"):
         assert dc._tool_user_id.get() == "u99"
@@ -53,7 +57,7 @@ def test_get_zep_thread_context_uses_session_thread_id() -> None:
 def test_get_compiled_clinical_agent_caches(
     mock_create: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("NEBIUS_API_KEY", "test-key")
+    monkeypatch.setenv("FIREWORKS_API_KEY", "test-key")
     mock_create.return_value = MagicMock(name="graph")
     cp = MagicMock()
     g1 = dc.get_compiled_clinical_agent("model-x", cp)
@@ -64,7 +68,7 @@ def test_get_compiled_clinical_agent_caches(
 
 @patch("medtrace_agent.agents.deep_clinical.get_compiled_clinical_agent")
 def test_run_clinical_deep_agent_turn(mock_get: MagicMock, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("NEBIUS_API_KEY", "k")
+    monkeypatch.setenv("FIREWORKS_API_KEY", "k")
     graph = MagicMock()
     graph.invoke.return_value = {
         "messages": [

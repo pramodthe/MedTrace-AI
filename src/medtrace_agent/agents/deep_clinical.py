@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import contextvars
-import os
 from contextlib import contextmanager
 from typing import Any, Iterator
 
@@ -14,6 +13,11 @@ from langgraph.checkpoint.memory import MemorySaver
 
 from deepagents import create_deep_agent
 
+from medtrace_agent.fireworks_config import (
+    fireworks_api_key,
+    fireworks_base_url,
+    fireworks_reasoning_effort,
+)
 from medtrace_agent.integrations.pubmed import pubmed_search_summaries
 from medtrace_agent.ontology.clinical import ONTOLOGY_EDGE_TYPES, ONTOLOGY_NODE_LABELS
 from medtrace_agent.zep.graph import (
@@ -23,8 +27,6 @@ from medtrace_agent.zep.graph import (
     search_ontology_nodes,
 )
 from medtrace_agent.zep.memory import fetch_thread_context
-
-DEFAULT_NEBIUS_BASE_URL = "https://api.tokenfactory.nebius.com/v1/"
 
 # Request-scoped bind for Zep tools (safe with concurrent Streamlit sessions / asyncio tasks).
 _tool_user_id: contextvars.ContextVar[str] = contextvars.ContextVar(
@@ -52,10 +54,11 @@ def clinical_tool_session(user_id: str, thread_id: str) -> Iterator[None]:
 DEEP_CLINICAL_SYSTEM = """You are a clinical reasoning assistant in an educational demo (NOT a licensed medical device).
 
 You MUST:
-- Use tools to ground patient-specific claims: call `get_zep_thread_context`, `list_graph_episodes`, `list_temporal_edges`, and ontology search tools before stating what happened on the patient's timeline.
-- When the user asks for literature, mechanisms, or evidence, call `pubmed_search_literature`.
+- Use tools to ground patient-specific claims: call `get_zep_thread_context`, `list_graph_episodes`, `list_temporal_edges`, and ontology search tools (`search_patient_ontology_nodes`, `search_patient_ontology_edges`) before stating what happened on the patient's timeline.
+- For background mechanisms, guidelines-oriented questions, or whenever external peer-reviewed evidence would materially improve the answer, call `pubmed_search_literature` with a focused query — do not wait for the user to say “PubMed” if literature is clearly relevant.
+- After PubMed results return, **synthesize**: tie titles/findings to the patient-specific picture only where justified; clearly separate **what the Zep graph shows for this patient** from **what the literature says generally**.
 - Present **differential considerations** and **questions to clarify** — never a definitive diagnosis or treatment plan.
-- Label inference clearly: 'possible consideration', 'would warrant evaluation if ...', and separate **Zep graph facts** from **PubMed literature**.
+- Label inference clearly: 'possible consideration', 'would warrant evaluation if ...', and cite PMIDs when using PubMed output.
 - Be concise. Avoid filesystem/task tools unless truly needed for the user's request; prefer Zep + PubMed tools for clinical questions.
 
 You MUST NOT:
@@ -152,14 +155,12 @@ ALL_CLINICAL_TOOLS = [
 
 
 def _make_llm(model_name: str) -> ChatOpenAI:
-    key = os.environ.get("NEBIUS_API_KEY")
-    if not key:
-        raise RuntimeError("NEBIUS_API_KEY is not set.")
     return ChatOpenAI(
         model=model_name,
         temperature=0.2,
-        api_key=key,
-        base_url=os.environ.get("NEBIUS_BASE_URL") or DEFAULT_NEBIUS_BASE_URL,
+        api_key=fireworks_api_key(),
+        base_url=fireworks_base_url(),
+        reasoning_effort=fireworks_reasoning_effort(),
     )
 
 

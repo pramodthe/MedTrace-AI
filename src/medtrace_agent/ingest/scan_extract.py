@@ -9,11 +9,18 @@ import re
 from typing import Any, Callable
 
 import fitz  # PyMuPDF
+import httpx
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-DEFAULT_NEBIUS_BASE_URL = "https://api.tokenfactory.nebius.com/v1/"
+from medtrace_agent.fireworks_config import (
+    fireworks_api_key,
+    fireworks_base_url,
+    fireworks_reasoning_effort,
+    fireworks_vlm_api_mode,
+    fireworks_vlm_model,
+)
 
 VLM_SYSTEM_PROMPT = """You are a clinical document understanding assistant. You receive a single page image from a medical PDF.
 
@@ -99,16 +106,64 @@ def _extract_json_object(raw: str) -> dict[str, Any]:
 
 
 def _get_vlm_llm(model: str) -> ChatOpenAI:
-    key = os.environ.get("NEBIUS_API_KEY")
-    if not key:
-        raise RuntimeError("NEBIUS_API_KEY is not set.")
     return ChatOpenAI(
         model=model,
         temperature=0.1,
-        api_key=key,
-        base_url=os.environ.get("NEBIUS_BASE_URL") or DEFAULT_NEBIUS_BASE_URL,
+        api_key=fireworks_api_key(),
+        base_url=fireworks_base_url(),
         max_tokens=8192,
+        reasoning_effort=fireworks_reasoning_effort(),
     )
+
+
+def _fireworks_completions_vlm_prompt(user_block: str) -> str:
+    """Fireworks completions VL format: one ``<image>`` token per image in ``images``."""
+    return (
+        f"SYSTEM: {VLM_SYSTEM_PROMPT}\n\n"
+        f"USER:<image>\n{user_block.strip()}\n\n"
+        "ASSISTANT:"
+    )
+
+
+def _fireworks_completions_vlm_invoke(model: str, png_bytes: bytes, user_block: str) -> str:
+    """POST ``/v1/completions`` with ``prompt`` + ``images`` (see Fireworks vision docs)."""
+    b64 = base64.standard_b64encode(png_bytes).decode("ascii")
+    data_uri = f"data:image/png;base64,{b64}"
+    base = fireworks_base_url().rstrip("/")
+    url = f"{base}/completions"
+    payload: dict[str, Any] = {
+        "model": model,
+        "prompt": _fireworks_completions_vlm_prompt(user_block),
+        "images": [data_uri],
+        "max_tokens": 8192,
+        "top_p": 1,
+        "top_k": 40,
+        "presence_penalty": 0,
+        "frequency_penalty": 0,
+        "temperature": 0.1,
+        "reasoning_effort": fireworks_reasoning_effort(),
+    }
+    headers = {
+        "Authorization": f"Bearer {fireworks_api_key()}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+    timeout = float(os.environ.get("FIREWORKS_VLM_COMPLETIONS_TIMEOUT", "120"))
+    with httpx.Client(timeout=timeout) as client:
+        r = client.post(url, headers=headers, json=payload)
+    try:
+        data = r.json()
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Fireworks completions: non-JSON response ({r.status_code}): {r.text[:500]}") from exc
+    if r.status_code >= 400:
+        raise RuntimeError(f"Fireworks completions HTTP {r.status_code}: {data}")
+    choices = data.get("choices") or []
+    if not choices:
+        raise RuntimeError(f"Fireworks completions: empty choices: {data}")
+    text = choices[0].get("text")
+    if text is None:
+        raise RuntimeError(f"Fireworks completions: missing choices[0].text: {data}")
+    return text
 
 
 def vl_extract_single_page(
@@ -119,14 +174,34 @@ def vl_extract_single_page(
     model: str,
 ) -> PageVLMExtract:
     """One VLM call per page; validates JSON with Pydantic, one repair retry."""
-    llm = _get_vlm_llm(model)
-    b64 = base64.standard_b64encode(png_bytes).decode("ascii")
-    data_uri = f"data:image/png;base64,{b64}"
-
     user_text = (
         f"This is page {page_index} of {total_pages}. "
         "Analyze the image and output the single JSON object as specified in the system message."
     )
+
+    def parse_response(content: str) -> PageVLMExtract:
+        obj = _extract_json_object(content)
+        return PageVLMExtract.model_validate(obj)
+
+    mode = fireworks_vlm_api_mode()
+
+    if mode == "completions":
+        text_out = _fireworks_completions_vlm_invoke(model, png_bytes, user_text)
+        try:
+            return parse_response(text_out)
+        except (json.JSONDecodeError, ValidationError) as first_err:
+            repair_block = (
+                f"{user_text}\n\n"
+                "Your previous reply was not valid JSON matching the schema. "
+                f"Error: {first_err}\n\n"
+                "Reply with ONLY one raw JSON object (no markdown), matching the schema from the system message."
+            )
+            text2 = _fireworks_completions_vlm_invoke(model, png_bytes, repair_block)
+            return parse_response(text2)
+
+    llm = _get_vlm_llm(model)
+    b64 = base64.standard_b64encode(png_bytes).decode("ascii")
+    data_uri = f"data:image/png;base64,{b64}"
     messages = [
         SystemMessage(content=VLM_SYSTEM_PROMPT),
         HumanMessage(
@@ -136,10 +211,6 @@ def vl_extract_single_page(
             ]
         ),
     ]
-
-    def parse_response(content: str) -> PageVLMExtract:
-        obj = _extract_json_object(content)
-        return PageVLMExtract.model_validate(obj)
 
     resp = llm.invoke(messages)
     raw_content = resp.content
@@ -188,12 +259,7 @@ def pdf_bytes_via_vlm(
     dpi_eff = dpi if dpi is not None else int(os.environ.get("PDF_VL_DPI", "150"))
     max_eff = max_pages if max_pages is not None else int(os.environ.get("PDF_VL_MAX_PAGES", "25"))
 
-    model = os.environ.get("NEBIUS_VL_MODEL")
-    if not model:
-        raise RuntimeError(
-            "NEBIUS_VL_MODEL is not set. Add it to .env for vision PDF ingest, "
-            "or use text-only ingest (pypdf)."
-        )
+    model = fireworks_vlm_model()
 
     images = pdf_to_page_images_png(data, dpi=dpi_eff, max_pages=max_eff)
     total = len(images)

@@ -26,8 +26,8 @@ def test_zep_to_lc_maps_roles() -> None:
 
 
 def test_chat_with_memory_requires_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("NEBIUS_API_KEY", raising=False)
-    with pytest.raises(RuntimeError, match="NEBIUS_API_KEY"):
+    monkeypatch.delenv("FIREWORKS_API_KEY", raising=False)
+    with pytest.raises(RuntimeError, match="FIREWORKS_API_KEY"):
         chat_with_memory(
             user_input="hi",
             user_display_name="x",
@@ -39,7 +39,7 @@ def test_chat_with_memory_requires_api_key(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 def test_chat_with_memory_invokes_llm(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("NEBIUS_API_KEY", "k")
+    monkeypatch.setenv("FIREWORKS_API_KEY", "k")
     mock_resp = MagicMock()
     mock_resp.content = "Assistant reply"
     with patch("medtrace_agent.agents.rag_chat.ChatOpenAI") as llm_cls:

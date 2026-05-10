@@ -6,7 +6,7 @@
 
 #  Architecture
 
-Streamlit demo that combines **Zep Cloud** (long-term memory + temporal knowledge graph) with a **LangChain / OpenAI-compatible chat model** (default: Nebius Token Factory). This document describes how the pieces fit together.
+Streamlit demo that combines **Zep Cloud** (long-term memory + temporal knowledge graph) with a **LangChain / OpenAI-compatible chat model** (**Fireworks AI**). This document describes how the pieces fit together.
 
 ## High-level picture
 
@@ -17,14 +17,14 @@ flowchart LR
   end
   subgraph llm [LLM layer]
     AG[medtrace_agent.agents.rag_chat]
-    NEB[Nebius / OpenAI-compatible API]
+    FW[Fireworks AI OpenAI-compatible API]
   end
   subgraph zep [Zep Cloud]
     TH[Thread API]
     GR[Graph API]
   end
   APP --> AG
-  AG --> NEB
+  AG --> FW
   APP --> ZM[zep/memory.py]
   APP --> ZG[zep/graph.py]
   APP --> DOC[ingest/documents.py]
@@ -33,11 +33,11 @@ flowchart LR
   APP --> DCA[agents/deep_clinical.py]
   ZM --> TH
   DOC --> GR
-  SCAN --> NEB
+  SCAN --> FW
   ONTO --> GR
   ZG --> GR
   TH --> AG
-  DCA --> NEB
+  DCA --> FW
   DCA --> GR
 ```
 
@@ -49,7 +49,7 @@ flowchart LR
 
 ## AI agent architecture
 
-How **`apps/streamlit_app.py`** chooses between the **fast RAG chat** and the **Deep Clinical Agent**, and how each connects to Nebius, Zep, and PubMed.
+How **`apps/streamlit_app.py`** chooses between the **fast RAG chat** and the **Deep Clinical Agent**, and how each connects to Fireworks AI, Zep, and PubMed.
 
 ```mermaid
 flowchart TB
@@ -65,7 +65,7 @@ flowchart TB
     SYS1[System prompt plus catalog]
     CTX1[Zep context via fetch_thread_context]
     HIST1[Thread messages thread.get]
-    LLM1[ChatOpenAI Nebius]
+    LLM1[ChatOpenAI Fireworks]
     fastPath --> LLM1
     SYS1 --> LLM1
     CTX1 --> LLM1
@@ -76,7 +76,7 @@ flowchart TB
     DA[create_deep_agent LangGraph]
     HARNESS[Deep Agents middleware]
     TOOLS[Custom Zep and PubMed tools]
-    LLM2[ChatOpenAI Nebius]
+    LLM2[ChatOpenAI Fireworks]
     CP[MemorySaver thread_id]
     deepPath --> DA
     DA --> HARNESS
@@ -125,7 +125,7 @@ flowchart TB
 | Piece | Role |
 |--------|------|
 | **Fast path** | Single **`chat_with_memory`** call: system prompt + Zep **`thread.get_user_context`** text (via **`fetch_thread_context`**) + recent **`thread.get`** messages + optional ingested-document catalog. **No tool loop.** |
-| **Deep path** | **`create_deep_agent`** with the same Nebius **`ChatOpenAI`**, custom tools for Zep graph + PubMed, **`MemorySaver`** keyed by Streamlit **`thread_id`**, plus built-in Deep Agents middleware (planning, virtual filesystem, subagents — not shown in detail). |
+| **Deep path** | **`create_deep_agent`** with the same Fireworks-backed **`ChatOpenAI`**, custom tools for Zep graph + PubMed, **`MemorySaver`** keyed by Streamlit **`thread_id`**, plus built-in Deep Agents middleware (planning, virtual filesystem, subagents — not shown in detail). |
 | **PubMed** | **`medtrace_agent.integrations.pubmed`** — NCBI **E-utilities** (`esearch` / `esummary`) over HTTP JSON, **not** HTML scraping. |
 
 ## Repository layout
@@ -144,7 +144,7 @@ flowchart TB
 | Module | Role |
 | ------ | ---- |
 | `apps/streamlit_app.py` | Streamlit layout: sidebar (patient, **Clinical reasoning (Deep Agent)** checkbox, PDF upload, ontology, graph controls), chat column, graph inspector. Dual chat path: **`chat_with_memory`** vs **`run_clinical_deep_agent_turn`**. |
-| `medtrace_agent.agents.rag_chat` | `chat_with_memory(...)`: composes system prompt from base instructions, **Memory context** (`zep_context`), and **Ingested clinical documents** (`document_catalog`). Invokes `ChatOpenAI` against Nebius base URL + API key. |
+| `medtrace_agent.agents.rag_chat` | `chat_with_memory(...)`: composes system prompt from base instructions, **Memory context** (`zep_context`), and **Ingested clinical documents** (`document_catalog`). Invokes `ChatOpenAI` against Fireworks AI base URL + API key. |
 | `medtrace_agent.agents.deep_clinical` | **`create_deep_agent`** (LangChain Deep Agents): Zep tools (`get_zep_thread_context`, episodes, edges, ontology search) + **`pubmed_search_literature`**, **`MemorySaver`** checkpointing keyed by Streamlit `thread_id`. Non-diagnostic CDS framing. |
 | `medtrace_agent.integrations.pubmed` | NCBI **esearch** + **esummary** (JSON) for PubMed titles/PMIDs; uses **`NCBI_EMAIL`** / **`NCBI_API_KEY`** when set. |
 | `medtrace_agent.zep.memory` | Zep client singleton; `ensure_user`, `ensure_session` (thread create); `fetch_thread_context` (`thread.get_user_context` + `thread.get` message tail); `append_turn` (`thread.add_messages`). Handles duplicate-user / duplicate-thread `BadRequestError` shapes. |
@@ -193,7 +193,7 @@ Educational demo only: outputs are **not** a diagnosis or substitute for clinica
 
 ## PDF ingest sequence
 
-**Default (vision):** every PDF is rendered **page-by-page to PNG** with **PyMuPDF** (`fitz`). Each image is sent to `**NEBIUS_VL_MODEL`** via OpenAI-compatible `**ChatOpenAI**` (multimodal messages). The model returns **JSON** (structured clinical fields + `**page_visible_text`** transcript), validated with **Pydantic**, then concatenated into one plain-text document by `**serialize_pages_for_ingest`**.
+**Default (vision):** every PDF is rendered **page-by-page to PNG** with **PyMuPDF** (`fitz`). Each image is sent to **`FIREWORKS_VL_MODEL`** (defaults to chat model) via OpenAI-compatible **`ChatOpenAI`** (multimodal messages). The model returns **JSON** (structured clinical fields + **`page_visible_text`** transcript), validated with **Pydantic**, then concatenated into one plain-text document by **`serialize_pages_for_ingest`**.
 
 **Optional fast path (“Skip VLM” in the UI):** `**pdf_bytes_to_text_pypdf`** reads only the embedded text layer (`pypdf`). Cheaper and faster for born-digital PDFs; **does not** read scanned pages, handwriting, or text that exists only inside embedded bitmaps.
 
@@ -277,14 +277,17 @@ Vision models can **misread numbers** or **hallucinate** structured fields. Trea
 
 See `.env.example`. Required:
 
-- `**NEBIUS_API_KEY**` — Token Factory / OpenAI-compatible endpoint for `ChatOpenAI`.
+- `**FIREWORKS_API_KEY**` — Fireworks AI OpenAI-compatible endpoint for `ChatOpenAI`.
 - `**ZEP_API_KEY**` — Zep Cloud project.
 
-Optional env vars (defaults in code): `NEBIUS_BASE_URL`, `NEBIUS_MODEL`.
+Optional env vars (defaults in code): `FIREWORKS_BASE_URL`, `FIREWORKS_MODEL`.
 
-Vision PDF ingest (required for default ingest unless the user enables **Skip VLM** in the UI):
+Vision PDF ingest (default ingest unless the user enables **Skip VLM** in the UI):
 
-- `**NEBIUS_VL_MODEL`** — multimodal model slug on the same OpenAI-compatible base URL as chat.
+- `**FIREWORKS_VL_MODEL`** — multimodal id for PDF vision ingest (defaults to **`kimi-k2p5`** in code — adjust per [your enabled models](https://fireworks.ai/models); Qwen3.6 Plus is not on every account).
+- `**FIREWORKS_VLM_API**` — `chat` (default: `/v1/chat/completions` via LangChain; works with **kimi-k2p5**) or `completions` (Fireworks `POST /v1/completions` with `<image>` in `prompt`, for Qwen-style VLMs — see [vision docs](https://docs.fireworks.ai/guides/querying-vision-language-models)).
+
+If you see **`404` / model does not exist**, your key cannot access that model id; pick another **Serverless** model from the Fireworks library and update `.env`.
 - `**PDF_VL_MAX_PAGES**` (default `25`), `**PDF_VL_DPI**` (default `150`) — caps and render quality for PyMuPDF rasterization.
 
 Clinical reasoning / PubMed (optional):
@@ -313,7 +316,7 @@ pytest
 
 - **streamlit** — UI and session state  
 - **zep-cloud** (v3) — `Zep` client, thread + graph APIs  
-- **langchain-openai** / **langchain-core** — `ChatOpenAI` pointed at Nebius  
+- **langchain-openai** / **langchain-core** — `ChatOpenAI` pointed at Fireworks AI  
 - **pandas** — tables for the graph inspector  
 - **pypdf** — optional fast text-layer extraction (Skip VLM)  
 - **pymupdf** — PDF page rasterization for vision ingest  
