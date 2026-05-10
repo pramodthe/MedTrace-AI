@@ -80,11 +80,12 @@ function DashboardBody({
   ];
 
   return (
-    // Outer container reserves room for the fixed chat panel on xl screens so
-    // every child (header + main grid) respects the chat width and never sits
-    // underneath it. Inner column is also capped at ~half the viewport.
-    <div className="mx-auto min-h-screen w-full max-w-[1440px] px-4 py-4 sm:px-6 lg:px-8 xl:pr-[400px]">
-      <div className="xl:max-w-[820px]">
+    // xl layout: flex row with `gap-4` (1rem) between the dashboard column
+    // and the chat panel. The chat panel is a sticky flex sibling (no longer
+    // position:fixed) so the gap is exactly 16px regardless of viewport width.
+    <div className="mx-auto min-h-screen w-full max-w-[1440px] px-4 py-4 sm:px-6 lg:px-8">
+      <div className="xl:flex xl:items-start xl:gap-4">
+      <div className="min-w-0 xl:flex-1">
       <header className="clinical-panel mb-4 overflow-hidden">
         <div className="flex flex-col gap-4 p-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex min-w-0 items-center gap-4">
@@ -130,8 +131,7 @@ function DashboardBody({
         </div>
       </header>
 
-      <div className="grid grid-cols-1 gap-4 xl:block">
-        <main className="min-w-0 space-y-4">
+      <main className="min-w-0 space-y-4">
           <section className="clinical-panel p-4">
             <div className="mb-4 flex items-start justify-between gap-4">
               <div>
@@ -373,9 +373,10 @@ function DashboardBody({
             </section>
           </div>
         </main>
+      </div>
 
-        <aside className="mt-4 xl:fixed xl:bottom-4 xl:right-8 xl:top-4 xl:mt-0 xl:w-[360px]">
-          <div className="flex h-[560px] flex-col overflow-hidden rounded-xl border border-border bg-white shadow-[0_1px_3px_0_rgb(15_23_42_/_0.08)] xl:h-full">
+        <aside className="mt-4 xl:sticky xl:top-4 xl:mt-0 xl:w-[480px] xl:shrink-0 xl:self-start">
+          <div className="flex h-[560px] flex-col overflow-hidden rounded-xl border border-border bg-white shadow-[0_1px_3px_0_rgb(15_23_42_/_0.08)] xl:h-[calc(100vh-2rem)]">
             <AIChatPanel
               patientId={patient.id}
               patientName={patient.name}
@@ -384,7 +385,6 @@ function DashboardBody({
             />
           </div>
         </aside>
-      </div>
       </div>
     </div>
   );
