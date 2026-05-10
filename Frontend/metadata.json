@@ -1,0 +1,6 @@
+{
+  "name": "Clinical Memory Assistant",
+  "description": "An AI-powered patient memory dashboard that helps doctors understand medical history through a temporal knowledge graph.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}

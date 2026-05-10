@@ -1,58 +1,65 @@
-# macOS
-.DS_Store
-._*
-
-# Environment files (NEVER commit secrets)
-.env
-.env.local
-.env.*.local
-backend/.env
-frontend/.env.local
-frontend/.env.*.local
-
-# Python
+# Byte-compiled / cache
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
-backend/.venv/
-venv/
-.venv/
-build/
-dist/
 *.egg-info/
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
+.eggs/
+dist/
+build/
 
-# Node
-node_modules/
-frontend/dist/
-frontend/.turbo/
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
 
-# Generated/runtime data
-backend/data/studies/
-backend/uploads/
-*.log
+# Secrets and local env (never commit keys)
+.env
+.env.local
+.env.*.local
 
-# Nested repositories / service-local git metadata
-**/.git/
-
-# MedSAMlite service local artifacts
-services/medsamlite/.venv/
-services/medsamlite/data/
-services/medsamlite/**/*.pth
-services/medsamlite/**/*.npz
-services/medsamlite/Swin_LiteMedSam/*.pth
-
-# IDE
+# OS / editor
+.DS_Store
+Thumbs.db
 .idea/
 .vscode/
-.claude
-.cursor/
 *.swp
 *.swo
 
-# OS
-Thumbs.db
+# Jupyter / tooling
+.ipynb_checkpoints/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Streamlit (if you add secrets locally)
+.streamlit/secrets.toml
+
+# Local clinical notes / uploads under data/ (keep .gitkeep only)
+data/**/*.txt
+data/**/*.pdf
+data/**/*.png
+data/**/*.jpg
+data/**/*.jpeg
+
+# Cursor (optional local rules; remove line if you want to commit .cursor rules)
+.cursor/
+
+# InsForge & AI agent skills
+.insforge
+.agent
+.agents
+.augment
+.claude
+.cline
+.github/copilot*
+.kilocode
+.qoder
+.qwen
+.roo
+.trae
+.windsurf

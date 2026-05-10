@@ -1,0 +1,8 @@
+# Install the package in editable mode (preferred).
+#   pip install -e ".[dev]"
+#   uv pip install -e .[dev]
+#
+# Or minimal runtime only:
+#   pip install -e .
+
+-e .[dev]
