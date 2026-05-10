@@ -20,6 +20,8 @@ load_dotenv()
 import streamlit as st
 
 from agent import chat_with_memory
+from deep_clinical_agent import run_clinical_deep_agent_turn
+from pubmed_eutils import pubmed_search_summaries
 from clinical_ontology import (
     ONTOLOGY_EDGE_TYPES,
     ONTOLOGY_NODE_LABELS,
@@ -37,7 +39,38 @@ from zep_graph import (
     search_ontology_edges,
     search_ontology_nodes,
 )
+from langgraph.checkpoint.memory import MemorySaver
+
 from zep_memory import append_turn, ensure_session, ensure_user, fetch_thread_context
+
+# Label, prompt text, requires_deep_agent bool
+SAMPLE_CHAT_PROMPTS: list[tuple[str, str, bool]] = [
+    (
+        "RAG — Zep memory check",
+        "What do you know about this patient from Zep memory and recent messages? Summarize briefly and note uncertainty.",
+        False,
+    ),
+    (
+        "RAG — Session documents",
+        "Which documents appear in the ingested-document registry for this session? How should you cite doc_id and filename when answering?",
+        False,
+    ),
+    (
+        "Deep — graph tools",
+        "Use your Zep tools: fetch synthesized thread context, list recent graph episodes and temporal edges for this patient. Describe any timeline pattern as hypotheses only — not a diagnosis.",
+        True,
+    ),
+    (
+        "Deep — ontology search",
+        "Use ontology search tools on this patient's graph for conditions or medications relevant to a typical chronic-care timeline (hypothetical query text). Summarize what the graph returns.",
+        True,
+    ),
+    (
+        "Deep — PubMed literature",
+        "Search PubMed for type 2 diabetes first-line therapy overview and briefly summarize themes from the retrieved titles (educational only; not prescribing advice). Include PMIDs.",
+        True,
+    ),
+]
 
 
 def _new_thread_id() -> str:
@@ -170,6 +203,39 @@ def main() -> None:
             "NEBIUS_MODEL", "nvidia/Nemotron-3-Nano-Omni"
         )
         model_name = st.text_input("LLM model (Nebius)", value=default_model)
+
+        clinical_deep_agent = st.checkbox(
+            "Clinical reasoning (Deep Agent)",
+            value=False,
+            help=(
+                "LangChain Deep Agent with Zep tools (episodes, edges, ontology) + PubMed search tool. "
+                "PubMed uses the official NCBI API (not web scraping). Results appear in chat only when "
+                "the model calls that tool — try asking explicitly: “Search PubMed for …”. "
+                "Slower; demo only, not diagnostic."
+            ),
+        )
+        st.caption(
+            "Without this checkbox, chat uses the fast path (no PubMed). "
+            "Use **PubMed (NCBI API)** below to verify literature fetch works."
+        )
+
+        with st.expander("PubMed (NCBI API) — sample fetch", expanded=False):
+            st.markdown(
+                "Data comes from **NCBI E-utilities** (`esearch` + `esummary`), not scraped HTML. "
+                "Optional: set `NCBI_EMAIL` / `NCBI_API_KEY` in `.env`."
+            )
+            pm_q = st.text_input("PubMed query", value="diabetes mellitus", key="pubmed_test_query")
+            if st.button("Run sample PubMed fetch", key="pubmed_test_btn"):
+                with st.spinner("Calling NCBI…"):
+                    try:
+                        sample_out = pubmed_search_summaries(pm_q.strip() or "diabetes", max_results=4)
+                        st.markdown(sample_out)
+                        if sample_out.startswith("PubMed esearch failed") or sample_out.startswith(
+                            "PubMed esummary failed"
+                        ):
+                            st.error("NCBI request failed — check network or `.env` API key.")
+                    except Exception as exc:
+                        st.exception(exc)
 
         st.session_state.zep_user_id = st.text_input(
             "Patient Zep user id",
@@ -390,21 +456,66 @@ def main() -> None:
                         f"`{d['doc_id']}` — {d['filename']}" for d in msg["session_docs"]
                     )
                     st.caption(f"Reference documents (session registry): {refs}")
+                if msg["role"] == "assistant" and msg.get("deep_agent"):
+                    st.caption("Clinical reasoning: Deep Agent (Zep tools + optional PubMed)")
 
+        with st.expander("Sample prompts — click to send a test message", expanded=False):
+            st.caption(
+                "Prompts marked **Deep** need **Clinical reasoning (Deep Agent)** enabled in the sidebar. "
+                "Others work with the fast RAG chat path."
+            )
+            for idx, (label, prompt_text, needs_deep) in enumerate(SAMPLE_CHAT_PROMPTS):
+                c1, c2 = st.columns((4, 1))
+                with c1:
+                    badge = "(Deep Agent)" if needs_deep else "(Fast chat)"
+                    st.markdown(f"**{label}** `{badge}`")
+                    st.caption(prompt_text[:220] + ("…" if len(prompt_text) > 220 else ""))
+                with c2:
+                    disabled = needs_deep and not clinical_deep_agent
+                    if st.button(
+                        "Send",
+                        key=f"sample_prompt_btn_{idx}",
+                        disabled=disabled,
+                        help=(
+                            "Turn on Clinical reasoning (Deep Agent) in the sidebar first."
+                            if disabled
+                            else "Submit this text as the next user message."
+                        ),
+                    ):
+                        st.session_state["pending_chat_message"] = prompt_text
+                        st.rerun()
+
+        pending_chat = st.session_state.pop("pending_chat_message", None)
         user_input = st.chat_input("Message…")
+        if pending_chat:
+            user_input = pending_chat
         if user_input:
+            used_deep = False
             try:
                 zep_context, thread_msgs = fetch_thread_context(st.session_state.thread_id)
                 st.session_state.last_zep_context = zep_context
                 catalog = _format_document_catalog(st.session_state.ingested_docs)
-                reply = chat_with_memory(
-                    user_input=user_input,
-                    user_display_name=st.session_state.zep_display_name,
-                    zep_context=zep_context,
-                    thread_messages=thread_msgs,
-                    model_name=model_name,
-                    document_catalog=catalog or None,
-                )
+                if clinical_deep_agent:
+                    used_deep = True
+                    if "deep_agent_checkpointer" not in st.session_state:
+                        st.session_state.deep_agent_checkpointer = MemorySaver()
+                    reply = run_clinical_deep_agent_turn(
+                        user_id=st.session_state.zep_user_id,
+                        thread_id=st.session_state.thread_id,
+                        model_name=model_name,
+                        user_input=user_input,
+                        document_catalog=catalog or None,
+                        checkpointer=st.session_state.deep_agent_checkpointer,
+                    )
+                else:
+                    reply = chat_with_memory(
+                        user_input=user_input,
+                        user_display_name=st.session_state.zep_display_name,
+                        zep_context=zep_context,
+                        thread_messages=thread_msgs,
+                        model_name=model_name,
+                        document_catalog=catalog or None,
+                    )
             except Exception as exc:
                 reply = f"Error calling the model or Zep: {exc}"
                 st.session_state.last_zep_context = ""
@@ -412,7 +523,12 @@ def main() -> None:
             docs_snapshot = [dict(d) for d in st.session_state.ingested_docs]
             st.session_state.messages.append({"role": "user", "content": user_input})
             st.session_state.messages.append(
-                {"role": "assistant", "content": reply, "session_docs": docs_snapshot}
+                {
+                    "role": "assistant",
+                    "content": reply,
+                    "session_docs": docs_snapshot,
+                    "deep_agent": used_deep,
+                }
             )
 
             try:
