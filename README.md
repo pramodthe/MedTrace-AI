@@ -13,10 +13,10 @@ Streamlit demo that combines **Zep Cloud** (long-term memory + temporal knowledg
 ```mermaid
 flowchart LR
   subgraph ui [Streamlit UI]
-    APP[app.py]
+    APP[apps/streamlit_app.py]
   end
   subgraph llm [LLM layer]
-    AG[agent.py]
+    AG[medtrace_agent.agents.rag_chat]
     NEB[Nebius / OpenAI-compatible API]
   end
   subgraph zep [Zep Cloud]
@@ -25,12 +25,12 @@ flowchart LR
   end
   APP --> AG
   AG --> NEB
-  APP --> ZM[zep_memory.py]
-  APP --> ZG[zep_graph.py]
-  APP --> DOC[document_ingest.py]
-  APP --> SCAN[scan_extract.py]
-  APP --> ONTO[clinical_ontology.py]
-  APP --> DCA[deep_clinical_agent.py]
+  APP --> ZM[zep/memory.py]
+  APP --> ZG[zep/graph.py]
+  APP --> DOC[ingest/documents.py]
+  APP --> SCAN[ingest/scan_extract.py]
+  APP --> ONTO[ontology/clinical.py]
+  APP --> DCA[agents/deep_clinical.py]
   ZM --> TH
   DOC --> GR
   SCAN --> NEB
@@ -44,16 +44,16 @@ flowchart LR
 
 
 - **UI** owns session state (patient id, thread id, ingested-document registry, chat history).
-- **Agent** — default **`chat_with_memory`** builds the system prompt (Zep context + optional document catalog) and calls the LLM once. Optional **Clinical reasoning (Deep Agent)** uses **`deep_clinical_agent`** (`create_deep_agent`) with Zep tools + PubMed (`pubmed_eutils`).
+- **Agent** — default **`chat_with_memory`** builds the system prompt (Zep context + optional document catalog) and calls the LLM once. Optional **Clinical reasoning (Deep Agent)** uses **`medtrace_agent.agents.deep_clinical`** (`create_deep_agent`) with Zep tools + PubMed (`integrations/pubmed`).
 - **Zep** stores conversational turns on **threads** and structured memories / episodes on the **user graph** (PDF chunks, extracted facts, ontology-backed nodes).
 
 ## AI agent architecture
 
-How **`app.py`** chooses between the **fast RAG chat** and the **Deep Clinical Agent**, and how each connects to Nebius, Zep, and PubMed.
+How **`apps/streamlit_app.py`** chooses between the **fast RAG chat** and the **Deep Clinical Agent**, and how each connects to Nebius, Zep, and PubMed.
 
 ```mermaid
 flowchart TB
-  subgraph ui [Streamlit app.py]
+  subgraph ui [Streamlit apps/streamlit_app.py]
     toggle{Clinical reasoning Deep Agent}
     chatIn[Chat input or sample prompts]
     chatIn --> toggle
@@ -61,7 +61,7 @@ flowchart TB
     toggle -->|Yes| deepPath[Deep path]
   end
 
-  subgraph fastAgent [Fast agent agent.py]
+  subgraph fastAgent [Fast path rag_chat.py]
     SYS1[System prompt plus catalog]
     CTX1[Zep context via fetch_thread_context]
     HIST1[Thread messages thread.get]
@@ -72,7 +72,7 @@ flowchart TB
     HIST1 --> LLM1
   end
 
-  subgraph deepAgent [Deep agent deep_clinical_agent.py]
+  subgraph deepAgent [Deep agent deep_clinical.py]
     DA[create_deep_agent LangGraph]
     HARNESS[Deep Agents middleware]
     TOOLS[Custom Zep and PubMed tools]
@@ -111,7 +111,7 @@ flowchart TB
   end
 
   subgraph ncbi [NCBI API]
-    EU[pubmed_eutils esearch esummary]
+    EU[integrations/pubmed esearch esummary]
     T6 --> EU
   end
 
@@ -126,22 +126,32 @@ flowchart TB
 |--------|------|
 | **Fast path** | Single **`chat_with_memory`** call: system prompt + Zep **`thread.get_user_context`** text (via **`fetch_thread_context`**) + recent **`thread.get`** messages + optional ingested-document catalog. **No tool loop.** |
 | **Deep path** | **`create_deep_agent`** with the same Nebius **`ChatOpenAI`**, custom tools for Zep graph + PubMed, **`MemorySaver`** keyed by Streamlit **`thread_id`**, plus built-in Deep Agents middleware (planning, virtual filesystem, subagents — not shown in detail). |
-| **PubMed** | **`pubmed_eutils`** — NCBI **E-utilities** (`esearch` / `esummary`) over HTTP JSON, **not** HTML scraping. |
+| **PubMed** | **`medtrace_agent.integrations.pubmed`** — NCBI **E-utilities** (`esearch` / `esummary`) over HTTP JSON, **not** HTML scraping. |
+
+## Repository layout
+
+| Path | Purpose |
+|------|---------|
+| `pyproject.toml` | Package metadata, dependencies, pytest config (`medtrace-agent`, installable from `src/`). |
+| `src/medtrace_agent/` | Importable package: `zep`, `ontology`, `integrations`, `agents`, `ingest`. |
+| `apps/streamlit_app.py` | Streamlit entrypoint (demo UI). |
+| `tests/` | Pytest suite (`pip install -e ".[dev]"` includes pytest). |
+| `data/` | Sample note paths (PDFs/notes gitignored; keep `.gitkeep` where needed). |
 
 ## Module responsibilities
 
 
-| Module                 | Role                                                                                                                                                                                                                                                                                                                                    |
-| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `app.py`               | Streamlit layout: sidebar (patient, **Clinical reasoning (Deep Agent)** checkbox, PDF upload, ontology, graph controls), chat column, graph inspector. Dual chat path: **`chat_with_memory`** vs **`run_clinical_deep_agent_turn`**.                                                                                                                                                     |
-| `agent.py`             | `chat_with_memory(...)`: composes system prompt from base instructions, **Memory context** (`zep_context`), and **Ingested clinical documents** (`document_catalog`). Invokes `ChatOpenAI` against Nebius base URL + API key.                                                                                                           |
-| `deep_clinical_agent.py` | **`create_deep_agent`** (LangChain Deep Agents): Zep tools (`get_zep_thread_context`, episodes, edges, ontology search) + **`pubmed_search_literature`**, **`MemorySaver`** checkpointing keyed by Streamlit `thread_id`. Non-diagnostic CDS framing.                                                                           |
-| `pubmed_eutils.py`     | NCBI **esearch** + **esummary** (JSON) for PubMed titles/PMIDs; uses **`NCBI_EMAIL`** / **`NCBI_API_KEY`** when set.                                                                                                                                                                                                                  |
-| `zep_memory.py`        | Zep client singleton; `ensure_user`, `ensure_session` (thread create); `fetch_thread_context` (`thread.get_user_context` + `thread.get` message tail); `append_turn` (`thread.add_messages`). Handles duplicate-user / duplicate-thread `BadRequestError` shapes.                                                                       |
-| `zep_graph.py`         | Read-only inspector: episodes by user, temporal edges by user, ontology-scoped `graph.search` for nodes/edges. Returns `pandas` frames for Streamlit.                                                                                                                                                                                   |
-| `document_ingest.py`   | `pdf_bytes_to_text(...)` (PDF → `**scan_extract`** VLM or `**pypdf**`). `**ingest_pdf_text_to_patient_graph**`, `**ingest_plain_text_note_to_patient_graph**`, `**ingest_txt_path_to_patient_graph**` for `**data/radiology_note/**` and `**data/session_note/**` `.txt` files. All paths use `**chunk_for_zep**` then `**graph.add**`. |
-| `scan_extract.py`      | `**pdf_to_page_images_png**`, `**vl_extract_single_page**` (LangChain `ChatOpenAI` + vision), Pydantic `**PageVLMExtract**`, `**pdf_bytes_via_vlm**` / `**serialize_pages_for_ingest**`.                                                                                                                                                |
-| `clinical_ontology.py` | Clinical demo ontology (entity + edge type definitions). `apply_clinical_ontology` calls `graph.set_ontology` (default: project-wide registration so dashboard visibility matches Zep docs).                                                                                                                                            |
+| Module | Role |
+| ------ | ---- |
+| `apps/streamlit_app.py` | Streamlit layout: sidebar (patient, **Clinical reasoning (Deep Agent)** checkbox, PDF upload, ontology, graph controls), chat column, graph inspector. Dual chat path: **`chat_with_memory`** vs **`run_clinical_deep_agent_turn`**. |
+| `medtrace_agent.agents.rag_chat` | `chat_with_memory(...)`: composes system prompt from base instructions, **Memory context** (`zep_context`), and **Ingested clinical documents** (`document_catalog`). Invokes `ChatOpenAI` against Nebius base URL + API key. |
+| `medtrace_agent.agents.deep_clinical` | **`create_deep_agent`** (LangChain Deep Agents): Zep tools (`get_zep_thread_context`, episodes, edges, ontology search) + **`pubmed_search_literature`**, **`MemorySaver`** checkpointing keyed by Streamlit `thread_id`. Non-diagnostic CDS framing. |
+| `medtrace_agent.integrations.pubmed` | NCBI **esearch** + **esummary** (JSON) for PubMed titles/PMIDs; uses **`NCBI_EMAIL`** / **`NCBI_API_KEY`** when set. |
+| `medtrace_agent.zep.memory` | Zep client singleton; `ensure_user`, `ensure_session` (thread create); `fetch_thread_context` (`thread.get_user_context` + `thread.get` message tail); `append_turn` (`thread.add_messages`). Handles duplicate-user / duplicate-thread `BadRequestError` shapes. |
+| `medtrace_agent.zep.graph` | Read-only inspector: episodes by user, temporal edges by user, ontology-scoped `graph.search` for nodes/edges. Returns `pandas` frames for Streamlit. |
+| `medtrace_agent.ingest.documents` | `pdf_bytes_to_text(...)` (PDF → **`ingest.scan_extract`** VLM or **`pypdf`**). **`ingest_pdf_text_to_patient_graph`**, **`ingest_plain_text_note_to_patient_graph`**, **`ingest_txt_path_to_patient_graph`** for **`data/radiology_note/`** and **`data/session_note/`** `.txt` files. All paths use **`chunk_for_zep`** then **`graph.add`**. |
+| `medtrace_agent.ingest.scan_extract` | **`pdf_to_page_images_png`**, **`vl_extract_single_page`** (LangChain `ChatOpenAI` + vision), Pydantic **`PageVLMExtract`**, **`pdf_bytes_via_vlm`** / **`serialize_pages_for_ingest`**. |
+| `medtrace_agent.ontology.clinical` | Clinical demo ontology (entity + edge type definitions). `apply_clinical_ontology` calls `graph.set_ontology` (default: project-wide registration so dashboard visibility matches Zep docs). |
 
 
 ## Zep: thread vs graph
@@ -209,7 +219,7 @@ flowchart TB
   subgraph pdfPath [PDF text extraction]
     PDF --> mode{Skip VLM?}
     mode -->|no| raster[PyMuPDF page to PNG]
-    raster --> vlm[scan_extract VLM per page]
+    raster --> vlm[ingest.scan_extract VLM per page]
     vlm --> unifiedStr[Single plain text document]
     mode -->|yes| pypdf[pypdf extract_text]
     pypdf --> unifiedStr
@@ -287,9 +297,16 @@ Clinical reasoning / PubMed (optional):
 ```bash
 python -m venv .venv
 source .venv/bin/activate   # or Windows equivalent
-pip install -r requirements.txt
-cp .env.example .env        # fill keys
-streamlit run app.py
+pip install -e ".[dev]"   # editable package + pytest; or: pip install -r requirements.txt
+cp .env.example .env      # fill keys
+streamlit run apps/streamlit_app.py
+# or (same UI): streamlit run app.py   # thin shim at repo root
+```
+
+Run tests:
+
+```bash
+pytest
 ```
 
 ## Dependency stack
@@ -301,5 +318,5 @@ streamlit run app.py
 - **pypdf** — optional fast text-layer extraction (Skip VLM)  
 - **pymupdf** — PDF page rasterization for vision ingest  
 - **pydantic** — validate VLM JSON before Zep ingest  
-- **deepagents** — optional Deep Agent chat path (`deep_clinical_agent.py`)
+- **deepagents** — optional Deep Agent chat path (`medtrace_agent.agents.deep_clinical`)
 

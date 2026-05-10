@@ -21,7 +21,7 @@ from zep_cloud.external_clients.ontology import (
     EntityText,
 )
 
-from zep_memory import get_zep_client
+from medtrace_agent.zep.memory import get_zep_client
 
 # For graph.search filters (custom type names match EntityModel class registrations).
 ONTOLOGY_NODE_LABELS: list[str] = [

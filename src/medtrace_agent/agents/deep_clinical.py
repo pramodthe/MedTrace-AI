@@ -2,31 +2,51 @@
 
 from __future__ import annotations
 
+import contextvars
 import os
-from typing import Any
+from contextlib import contextmanager
+from typing import Any, Iterator
 
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_openai import ChatOpenAI
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import MemorySaver
 
-from clinical_ontology import ONTOLOGY_EDGE_TYPES, ONTOLOGY_NODE_LABELS
 from deepagents import create_deep_agent
-from pubmed_eutils import pubmed_search_summaries
-from zep_graph import (
+
+from medtrace_agent.integrations.pubmed import pubmed_search_summaries
+from medtrace_agent.ontology.clinical import ONTOLOGY_EDGE_TYPES, ONTOLOGY_NODE_LABELS
+from medtrace_agent.zep.graph import (
     list_fact_edges,
     list_recent_episodes,
     search_ontology_edges,
     search_ontology_nodes,
 )
-from zep_memory import fetch_thread_context
+from medtrace_agent.zep.memory import fetch_thread_context
 
 DEFAULT_NEBIUS_BASE_URL = "https://api.tokenfactory.nebius.com/v1/"
 
-# Demo-only: bound synchronously before each invoke (single-user Streamlit sessions).
-_TOOL_BIND: dict[str, str] = {}
+# Request-scoped bind for Zep tools (safe with concurrent Streamlit sessions / asyncio tasks).
+_tool_user_id: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "medtrace_tool_user_id", default=""
+)
+_tool_thread_id: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "medtrace_tool_thread_id", default=""
+)
 
 GRAPH_CACHE: dict[tuple[str, int], Any] = {}
+
+
+@contextmanager
+def clinical_tool_session(user_id: str, thread_id: str) -> Iterator[None]:
+    """Bind ``user_id`` / ``thread_id`` for Deep Agent Zep tools for the duration of ``graph.invoke``."""
+    tok_u = _tool_user_id.set(user_id)
+    tok_t = _tool_thread_id.set(thread_id)
+    try:
+        yield
+    finally:
+        _tool_user_id.reset(tok_u)
+        _tool_thread_id.reset(tok_t)
 
 
 DEEP_CLINICAL_SYSTEM = """You are a clinical reasoning assistant in an educational demo (NOT a licensed medical device).
@@ -43,16 +63,10 @@ You MUST NOT:
 - Invent symptoms, dates, or lab values not supported by tool output."""
 
 
-def set_clinical_tool_bind(user_id: str, thread_id: str) -> None:
-    """Set patient + thread for tools that close over session context."""
-    _TOOL_BIND["user_id"] = user_id
-    _TOOL_BIND["thread_id"] = thread_id
-
-
 @tool
 def get_zep_thread_context() -> str:
     """Synthesized long-term + relevant memory string from Zep for the current chat thread."""
-    tid = _TOOL_BIND.get("thread_id", "")
+    tid = _tool_thread_id.get()
     if not tid:
         return "No thread_id bound."
     ctx, _ = fetch_thread_context(tid)
@@ -62,7 +76,7 @@ def get_zep_thread_context() -> str:
 @tool
 def list_graph_episodes(lastn: int = 25) -> str:
     """Recent Zep graph episodes for the current patient (text snippets ingested from chat/PDFs)."""
-    uid = _TOOL_BIND.get("user_id", "")
+    uid = _tool_user_id.get()
     if not uid:
         return "No user_id bound."
     lastn = max(1, min(int(lastn), 80))
@@ -75,7 +89,7 @@ def list_graph_episodes(lastn: int = 25) -> str:
 @tool
 def list_temporal_edges(limit: int = 40) -> str:
     """Temporal fact edges from the patient's Zep graph (facts, validity times)."""
-    uid = _TOOL_BIND.get("user_id", "")
+    uid = _tool_user_id.get()
     if not uid:
         return "No user_id bound."
     limit = max(1, min(int(limit), 100))
@@ -88,7 +102,7 @@ def list_temporal_edges(limit: int = 40) -> str:
 @tool
 def search_patient_ontology_nodes(query: str) -> str:
     """Semantic search over ontology node types (conditions, meds, etc.) for this patient."""
-    uid = _TOOL_BIND.get("user_id", "")
+    uid = _tool_user_id.get()
     if not uid:
         return "No user_id bound."
     q = (query or "").strip() or "patient clinical"
@@ -106,7 +120,7 @@ def search_patient_ontology_nodes(query: str) -> str:
 @tool
 def search_patient_ontology_edges(query: str) -> str:
     """Semantic search over ontology edge types (HAS_CONDITION, etc.) for this patient."""
-    uid = _TOOL_BIND.get("user_id", "")
+    uid = _tool_user_id.get()
     if not uid:
         return "No user_id bound."
     q = (query or "").strip() or "patient clinical"
@@ -201,7 +215,6 @@ def run_clinical_deep_agent_turn(
     """
     Run one Deep Agent turn with Zep/PubMed tools. Thread-scoped checkpoint via ``thread_id``.
     """
-    set_clinical_tool_bind(user_id, thread_id)
     graph = get_compiled_clinical_agent(model_name, checkpointer)
 
     body = user_input.strip()
@@ -214,12 +227,13 @@ def run_clinical_deep_agent_turn(
             + body
         )
 
-    result = graph.invoke(
-        {"messages": [HumanMessage(content=body)]},
-        config={
-            "configurable": {"thread_id": thread_id},
-            "recursion_limit": 50,
-        },
-    )
+    with clinical_tool_session(user_id, thread_id):
+        result = graph.invoke(
+            {"messages": [HumanMessage(content=body)]},
+            config={
+                "configurable": {"thread_id": thread_id},
+                "recursion_limit": 50,
+            },
+        )
     msgs = result.get("messages") or []
     return _extract_assistant_text(msgs)

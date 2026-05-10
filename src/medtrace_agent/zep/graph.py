@@ -8,7 +8,7 @@ import pandas as pd
 
 from zep_cloud.types.search_filters import SearchFilters
 
-from zep_memory import get_zep_client
+from medtrace_agent.zep.memory import get_zep_client
 
 
 def _episode_uuid(ep: Any) -> str:

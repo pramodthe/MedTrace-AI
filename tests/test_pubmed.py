@@ -1,10 +1,10 @@
-"""Tests for pubmed_eutils (NCBI E-utilities)."""
+"""Tests for medtrace_agent.integrations.pubmed (NCBI E-utilities)."""
 
 from __future__ import annotations
 
 import pytest
 
-from pubmed_eutils import pubmed_search_summaries
+from medtrace_agent.integrations.pubmed import pubmed_search_summaries
 
 
 def test_empty_query_returns_fixed_message() -> None:

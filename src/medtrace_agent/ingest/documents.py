@@ -13,12 +13,13 @@ NoteSource = Literal["radiology_note", "session_note"]
 
 from pypdf import PdfReader
 
-from zep_memory import get_zep_client
+from medtrace_agent.zep.memory import get_zep_client
 
 DEFAULT_MAX_CHARS = 9500
 PARAGRAPH_SPLIT = re.compile(r"\n\s*\n+")
 
-_REPO_ROOT = Path(__file__).resolve().parent
+# Repository root: .../src/medtrace_agent/ingest/documents.py -> parents[3]
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def data_note_dir(note_source: NoteSource) -> Path:
@@ -70,7 +71,7 @@ def pdf_bytes_to_text(
     Optional ``use_vlm=False`` uses pypdf only (cheaper; may miss scans and figures).
     """
     if use_vlm:
-        from scan_extract import pdf_bytes_via_vlm
+        from medtrace_agent.ingest.scan_extract import pdf_bytes_via_vlm
 
         return pdf_bytes_via_vlm(
             data,
