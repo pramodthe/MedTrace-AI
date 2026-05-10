@@ -2,11 +2,30 @@
 
 **“clinical decision support” or “cognitive aid”**: not replacing the doctor, but surfacing **patterns, timelines, and test ideas** the clinician still validates.
 
+## Sponsors & inference stack
 
+This project highlights an inference stack built with **sponsor** technologies:
+
+- **[AMD](https://www.amd.com/)** — **GPU acceleration for fine-tuning** our **custom** clinical models and for **high-throughput inference** when serving checkpoints.
+- **[Hugging Face](https://huggingface.co/)** — model artifacts, hub distribution, and **[Spaces](https://huggingface.co/docs/hub/spaces)** deployment for the **OpenAI-compatible** endpoints this app calls.
+- **[vLLM](https://docs.vllm.ai/en/latest/)** — we serve models behind LangChain using vLLM’s **[OpenAI-compatible server](https://docs.vllm.ai/en/latest/serving/openai_compatible_server/)** (`/v1/chat/completions` and related routes), so **`ChatOpenAI`** works without a vendor-specific SDK.
+
+Chat and **PDF page vision** (multimodal messages for structured extraction) both target the same style of endpoint: a **Hugging Face Space** (or compatible host) running **vLLM** on **AMD** hardware.
+
+Authentication for those endpoints is **optional** whenever your Space or gateway does not require a key; add a bearer token or API key only if your deployment enforces it (see [Configuration](#configuration)).
 
 #  Architecture
 
-Streamlit demo that combines **Zep Cloud** (long-term memory + temporal knowledge graph) with a **LangChain / OpenAI-compatible chat model** (**Fireworks AI**). This document describes how the pieces fit together.
+Streamlit demo that combines **Zep Cloud** (long-term memory + temporal knowledge graph) with **`ChatOpenAI`** pointed at an **OpenAI-compatible** endpoint. The **custom** [**MedGemma 1.5 4B IT (GGUF)**](https://huggingface.co/gguf-org/medgemma-1.5-4b-it-gguf) checkpoint (`gguf-org/medgemma-1.5-4b-it-gguf` on Hugging Face) is **fine-tuned** on **AMD** GPUs; we **deploy** inference on **[Hugging Face Spaces](https://huggingface.co/docs/hub/spaces)** behind **[vLLM’s OpenAI-compatible server](https://docs.vllm.ai/en/latest/serving/openai_compatible_server/)** for both chat and multimodal PDF ingest. Details: [LLM model](#llm-model) and [Sponsors & inference stack](#sponsors--inference-stack).
+
+## LLM model
+
+Clinical chat and agents use **`ChatOpenAI`** against the **OpenAI-compatible** base URL and model id you configure (names and defaults live in **`.env.example`**).
+
+- **Weights:** [gguf-org/medgemma-1.5-4b-it-gguf](https://huggingface.co/gguf-org/medgemma-1.5-4b-it-gguf) on **Hugging Face** (GGUF packaging for efficient serving).
+- **Fine-tuning:** performed using **AMD** GPU infrastructure (sponsor).
+- **Deployment:** models are served from a **[Hugging Face Space](https://huggingface.co/docs/hub/spaces)** running **[vLLM](https://docs.vllm.ai/en/latest/)** with the **[OpenAI-compatible HTTP API](https://docs.vllm.ai/en/latest/serving/openai_compatible_server/)**; point the app’s base URL and model id at that Space (or equivalent endpoint).
+- **PDF vision ingest:** each page image is sent to a **multimodal-capable** model using the same OpenAI-style **`/v1/chat/completions`** flow (see vLLM docs on multimodal serving); configure the vision base URL, model id, and API mode in **`.env.example`**. Pure text checkpoints do not replace the vision ingest path unless you use text-only extraction in the UI (**Skip VLM** matches the Streamlit control label).
 
 ## High-level picture
 
@@ -17,7 +36,7 @@ flowchart LR
   end
   subgraph llm [LLM layer]
     AG[medtrace_agent.agents.rag_chat]
-    FW[Fireworks AI OpenAI-compatible API]
+    FW[vLLM OpenAI API HF Space AMD]
   end
   subgraph zep [Zep Cloud]
     TH[Thread API]
@@ -49,7 +68,7 @@ flowchart LR
 
 ## AI agent architecture
 
-How **`apps/streamlit_app.py`** chooses between the **fast RAG chat** and the **Deep Clinical Agent**, and how each connects to Fireworks AI, Zep, and PubMed.
+How **`apps/streamlit_app.py`** chooses between the **fast RAG chat** and the **Deep Clinical Agent**, and how each connects to the configured OpenAI-compatible chat API, Zep, and PubMed.
 
 ```mermaid
 flowchart TB
@@ -65,7 +84,7 @@ flowchart TB
     SYS1[System prompt plus catalog]
     CTX1[Zep context via fetch_thread_context]
     HIST1[Thread messages thread.get]
-    LLM1[ChatOpenAI Fireworks]
+    LLM1[ChatOpenAI OpenAI-compatible]
     fastPath --> LLM1
     SYS1 --> LLM1
     CTX1 --> LLM1
@@ -76,7 +95,7 @@ flowchart TB
     DA[create_deep_agent LangGraph]
     HARNESS[Deep Agents middleware]
     TOOLS[Custom Zep and PubMed tools]
-    LLM2[ChatOpenAI Fireworks]
+    LLM2[ChatOpenAI OpenAI-compatible]
     CP[MemorySaver thread_id]
     deepPath --> DA
     DA --> HARNESS
@@ -125,7 +144,7 @@ flowchart TB
 | Piece | Role |
 |--------|------|
 | **Fast path** | Single **`chat_with_memory`** call: system prompt + Zep **`thread.get_user_context`** text (via **`fetch_thread_context`**) + recent **`thread.get`** messages + optional ingested-document catalog. **No tool loop.** |
-| **Deep path** | **`create_deep_agent`** with the same Fireworks-backed **`ChatOpenAI`**, custom tools for Zep graph + PubMed, **`MemorySaver`** keyed by Streamlit **`thread_id`**, plus built-in Deep Agents middleware (planning, virtual filesystem, subagents — not shown in detail). |
+| **Deep path** | **`create_deep_agent`** with the same configured **`ChatOpenAI`**, custom tools for Zep graph + PubMed, **`MemorySaver`** keyed by Streamlit **`thread_id`**, plus built-in Deep Agents middleware (planning, virtual filesystem, subagents — not shown in detail). |
 | **PubMed** | **`medtrace_agent.integrations.pubmed`** — NCBI **E-utilities** (`esearch` / `esummary`) over HTTP JSON, **not** HTML scraping. |
 
 ## Repository layout
@@ -144,12 +163,12 @@ flowchart TB
 | Module | Role |
 | ------ | ---- |
 | `apps/streamlit_app.py` | Streamlit layout: sidebar (patient, **Clinical reasoning (Deep Agent)** checkbox, PDF upload, ontology, graph controls), chat column, graph inspector. Dual chat path: **`chat_with_memory`** vs **`run_clinical_deep_agent_turn`**. |
-| `medtrace_agent.agents.rag_chat` | `chat_with_memory(...)`: composes system prompt from base instructions, **Memory context** (`zep_context`), and **Ingested clinical documents** (`document_catalog`). Invokes `ChatOpenAI` against Fireworks AI base URL + API key. |
+| `medtrace_agent.agents.rag_chat` | `chat_with_memory(...)`: composes system prompt from base instructions, **Memory context** (`zep_context`), and **Ingested clinical documents** (`document_catalog`). Invokes `ChatOpenAI` against the configured OpenAI-compatible chat endpoint. |
 | `medtrace_agent.agents.deep_clinical` | **`create_deep_agent`** (LangChain Deep Agents): Zep tools (`get_zep_thread_context`, episodes, edges, ontology search) + **`pubmed_search_literature`**, **`MemorySaver`** checkpointing keyed by Streamlit `thread_id`. Non-diagnostic CDS framing. |
 | `medtrace_agent.integrations.pubmed` | NCBI **esearch** + **esummary** (JSON) for PubMed titles/PMIDs; uses **`NCBI_EMAIL`** / **`NCBI_API_KEY`** when set. |
 | `medtrace_agent.zep.memory` | Zep client singleton; `ensure_user`, `ensure_session` (thread create); `fetch_thread_context` (`thread.get_user_context` + `thread.get` message tail); `append_turn` (`thread.add_messages`). Handles duplicate-user / duplicate-thread `BadRequestError` shapes. |
 | `medtrace_agent.zep.graph` | Read-only inspector: episodes by user, temporal edges by user, ontology-scoped `graph.search` for nodes/edges. Returns `pandas` frames for Streamlit. |
-| `medtrace_agent.ingest.documents` | `pdf_bytes_to_text(...)` (PDF → **`ingest.scan_extract`** VLM or **`pypdf`**). **`ingest_pdf_text_to_patient_graph`**, **`ingest_plain_text_note_to_patient_graph`**, **`ingest_txt_path_to_patient_graph`** for **`data/radiology_note/`** and **`data/session_note/`** `.txt` files. All paths use **`chunk_for_zep`** then **`graph.add`**. |
+| `medtrace_agent.ingest.documents` | `pdf_bytes_to_text(...)` (PDF → **`ingest.scan_extract`** vision path or **`pypdf`**). **`ingest_pdf_text_to_patient_graph`**, **`ingest_plain_text_note_to_patient_graph`**, **`ingest_txt_path_to_patient_graph`** for **`data/radiology_note/`** and **`data/session_note/`** `.txt` files. All paths use **`chunk_for_zep`** then **`graph.add`**. |
 | `medtrace_agent.ingest.scan_extract` | **`pdf_to_page_images_png`**, **`vl_extract_single_page`** (LangChain `ChatOpenAI` + vision), Pydantic **`PageVLMExtract`**, **`pdf_bytes_via_vlm`** / **`serialize_pages_for_ingest`**. |
 | `medtrace_agent.ontology.clinical` | Clinical demo ontology (entity + edge type definitions). `apply_clinical_ontology` calls `graph.set_ontology` (default: project-wide registration so dashboard visibility matches Zep docs). |
 
@@ -193,7 +212,7 @@ Educational demo only: outputs are **not** a diagnosis or substitute for clinica
 
 ## PDF ingest sequence
 
-**Default (vision):** every PDF is rendered **page-by-page to PNG** with **PyMuPDF** (`fitz`). Each image is sent to **`FIREWORKS_VL_MODEL`** (defaults to chat model) via OpenAI-compatible **`ChatOpenAI`** (multimodal messages). The model returns **JSON** (structured clinical fields + **`page_visible_text`** transcript), validated with **Pydantic**, then concatenated into one plain-text document by **`serialize_pages_for_ingest`**.
+**Default (vision):** every PDF is rendered **page-by-page to PNG** with **PyMuPDF** (`fitz`). Each image is sent to the configured **multimodal** model via **`ChatOpenAI`** against a **[vLLM OpenAI-compatible](https://docs.vllm.ai/en/latest/serving/openai_compatible_server/)** endpoint—typically a **[Hugging Face Space](https://huggingface.co/docs/hub/spaces)** on **AMD** GPUs (sponsor stack). The model returns **JSON** (structured clinical fields + **`page_visible_text`** transcript), validated with **Pydantic**, then concatenated into one plain-text document by **`serialize_pages_for_ingest`**.
 
 **Optional fast path (“Skip VLM” in the UI):** `**pdf_bytes_to_text_pypdf`** reads only the embedded text layer (`pypdf`). Cheaper and faster for born-digital PDFs; **does not** read scanned pages, handwriting, or text that exists only inside embedded bitmaps.
 
@@ -202,7 +221,7 @@ Then, for each file:
 1. The app assigns a `**doc_id`** and calls `**ingest_pdf_text_to_patient_graph**`, which `**chunk_for_zep**` splits the document and `**graph.add(type="text", ...)**` uploads each chunk (header includes `doc_id` / filename / chunk index). Metadata records `**extract_mode**` (`vlm_png` vs `pypdf`).
 2. Returned episode UUIDs are counted; `**ingested_docs**` is updated so chat can cite `**doc_id` / filename**.
 
-**Cost note:** vision ingest runs **one VLM call per page** (plus an occasional JSON repair call). Use `**PDF_VL_MAX_PAGES`** and sidebar limits to cap spend; lower `**PDF_VL_DPI**` to shrink images.
+**Cost note:** vision ingest runs **one multimodal inference call per page** (plus an occasional JSON repair call). Use `**PDF_VL_MAX_PAGES`** and sidebar limits to cap spend; lower `**PDF_VL_DPI**` to shrink images.
 
 ## Document ingestion architecture
 
@@ -217,10 +236,10 @@ flowchart TB
   end
 
   subgraph pdfPath [PDF text extraction]
-    PDF --> mode{Skip VLM?}
+    PDF --> mode{Skip vision mode?}
     mode -->|no| raster[PyMuPDF page to PNG]
-    raster --> vlm[ingest.scan_extract VLM per page]
-    vlm --> unifiedStr[Single plain text document]
+    raster --> vm_infer[ingest.scan_extract multimodal per page via vLLM]
+    vm_infer --> unifiedStr[Single plain text document]
     mode -->|yes| pypdf[pypdf extract_text]
     pypdf --> unifiedStr
   end
@@ -259,7 +278,7 @@ flowchart TB
 
 | Route                         | Typical Zep metadata `**kind**` | Chunk header prefix    |
 | ----------------------------- | ------------------------------- | ---------------------- |
-| PDF (default VLM or Skip VLM) | `pdf_medical_history`           | `[ClinicalDocument …]` |
+| PDF (default vision via vLLM or **Skip VLM** in UI) | `pdf_medical_history`           | `[ClinicalDocument …]` |
 | `data/radiology_note/*.txt`   | `radiology_note`                | `[RadiologyNote …]`    |
 | `data/session_note/*.txt`     | `session_note`                  | `[SessionNote …]`      |
 
@@ -275,20 +294,22 @@ Vision models can **misread numbers** or **hallucinate** structured fields. Trea
 
 ## Configuration
 
-See `.env.example`. Required:
+See **`.env.example`** for exact variable names and defaults.
 
-- `**FIREWORKS_API_KEY**` — Fireworks AI OpenAI-compatible endpoint for `ChatOpenAI`.
+**Required**
+
 - `**ZEP_API_KEY**` — Zep Cloud project.
 
-Optional env vars (defaults in code): `FIREWORKS_BASE_URL`, `FIREWORKS_MODEL`.
+**OpenAI-compatible chat + PDF vision (optional credentials)**
 
-Vision PDF ingest (default ingest unless the user enables **Skip VLM** in the UI):
+- Set the **chat** base URL, model id, and any **bearer token / API key** only if your **Hugging Face Space** or gateway requires them; **vLLM** deployments often need **no** client secret when the Space is public.
+- For **PDF page vision**, configure the vision base URL, multimodal model id, and API mode (`chat` vs `completions`-style prompts) as documented in **`.env.example`**. Those requests hit the same **[OpenAI-compatible vLLM server](https://docs.vllm.ai/en/latest/serving/openai_compatible_server/)** pattern as chat, backed by our **AMD** / **Hugging Face** sponsor deployment path.
 
-- `**FIREWORKS_VL_MODEL`** — multimodal id for PDF vision ingest (defaults to **`kimi-k2p5`** in code — adjust per [your enabled models](https://fireworks.ai/models); Qwen3.6 Plus is not on every account).
-- `**FIREWORKS_VLM_API**` — `chat` (default: `/v1/chat/completions` via LangChain; works with **kimi-k2p5**) or `completions` (Fireworks `POST /v1/completions` with `<image>` in `prompt`, for Qwen-style VLMs — see [vision docs](https://docs.fireworks.ai/guides/querying-vision-language-models)).
+**PDF rasterization**
 
-If you see **`404` / model does not exist**, your key cannot access that model id; pick another **Serverless** model from the Fireworks library and update `.env`.
 - `**PDF_VL_MAX_PAGES**` (default `25`), `**PDF_VL_DPI**` (default `150`) — caps and render quality for PyMuPDF rasterization.
+
+If **`404` / model not found** appears, the configured model id does not match what your endpoint exposes—update the model id in **`.env`** to match your Hugging Face or AMD serving deployment.
 
 Clinical reasoning / PubMed (optional):
 
@@ -301,7 +322,7 @@ Clinical reasoning / PubMed (optional):
 python -m venv .venv
 source .venv/bin/activate   # or Windows equivalent
 pip install -e ".[dev]"   # editable package + pytest; or: pip install -r requirements.txt
-cp .env.example .env      # fill keys
+cp .env.example .env      # Zep required; LLM auth optional per endpoint
 streamlit run apps/streamlit_app.py
 # or (same UI): streamlit run app.py   # thin shim at repo root
 ```
@@ -316,10 +337,11 @@ pytest
 
 - **streamlit** — UI and session state  
 - **zep-cloud** (v3) — `Zep` client, thread + graph APIs  
-- **langchain-openai** / **langchain-core** — `ChatOpenAI` pointed at Fireworks AI  
+- **langchain-openai** / **langchain-core** — `ChatOpenAI` against **[vLLM’s OpenAI-compatible API](https://docs.vllm.ai/en/latest/serving/openai_compatible_server/)** (**Hugging Face Spaces**, **AMD**)  
 - **pandas** — tables for the graph inspector  
-- **pypdf** — optional fast text-layer extraction (Skip VLM)  
+- **pypdf** — optional fast text-layer extraction (**Skip VLM** in UI)  
 - **pymupdf** — PDF page rasterization for vision ingest  
-- **pydantic** — validate VLM JSON before Zep ingest  
+- **pydantic** — validate multimodal page-extract JSON before Zep ingest  
+- **vLLM** (inference server) — OpenAI-compatible serving on **[Hugging Face Spaces](https://huggingface.co/docs/hub/spaces)** with **AMD** acceleration (see [Sponsors & inference stack](#sponsors--inference-stack))  
 - **deepagents** — optional Deep Agent chat path (`medtrace_agent.agents.deep_clinical`)
 

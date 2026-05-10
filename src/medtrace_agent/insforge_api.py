@@ -216,6 +216,119 @@ def insert_document_record(
     return None
 
 
+def list_chart_subjects(
+    *,
+    profile_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Return all chart_subjects rows for a profile (default: INSFORGE_PROFILE_ID).
+
+    Used by the React Frontend's patient directory.
+    """
+    if not insforge_persistence_enabled():
+        return []
+    pid = profile_id or _profile_id()
+    params = {
+        "owner_profile_id": f"eq.{pid}",
+        "select": "*",
+        "order": "created_at.desc",
+    }
+    with httpx.Client(timeout=30.0) as client:
+        r = client.get(_records("chart_subjects"), headers=_headers(), params=params)
+        r.raise_for_status()
+        data = r.json()
+        return data if isinstance(data, list) else []
+
+
+def get_chart_subject(
+    *,
+    chart_subject_id: str,
+) -> dict[str, Any] | None:
+    """Fetch a single chart_subjects row by id (must belong to INSFORGE_PROFILE_ID)."""
+    if not insforge_persistence_enabled():
+        return None
+    pid = _profile_id()
+    params = {
+        "id": f"eq.{chart_subject_id}",
+        "owner_profile_id": f"eq.{pid}",
+        "select": "*",
+        "limit": "1",
+    }
+    with httpx.Client(timeout=30.0) as client:
+        r = client.get(_records("chart_subjects"), headers=_headers(), params=params)
+        r.raise_for_status()
+        rows = r.json()
+        if isinstance(rows, list) and rows:
+            return rows[0] if isinstance(rows[0], dict) else None
+    return None
+
+
+def update_chart_subject_metadata(
+    *,
+    chart_subject_id: str,
+    metadata_patch: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Merge ``metadata_patch`` into ``chart_subjects.metadata`` (read-modify-write)."""
+    if not insforge_persistence_enabled():
+        return None
+    existing = get_chart_subject(chart_subject_id=chart_subject_id)
+    if not existing:
+        return None
+    current_meta = existing.get("metadata") or {}
+    if not isinstance(current_meta, dict):
+        current_meta = {}
+    merged = {**current_meta, **metadata_patch}
+    with httpx.Client(timeout=30.0) as client:
+        r = client.patch(
+            f"{_records('chart_subjects')}?id=eq.{chart_subject_id}",
+            headers={**_headers(), "Prefer": "return=representation"},
+            json={"metadata": merged},
+        )
+        r.raise_for_status()
+        out = r.json()
+        if isinstance(out, list) and out and isinstance(out[0], dict):
+            return out[0]
+    return None
+
+
+def list_chat_sessions_for_chart(
+    *,
+    chart_subject_id: str,
+) -> list[dict[str, Any]]:
+    """Return chat_sessions rows for a chart_subject (most recent first)."""
+    if not insforge_persistence_enabled():
+        return []
+    pid = _profile_id()
+    params = {
+        "profile_id": f"eq.{pid}",
+        "chart_subject_id": f"eq.{chart_subject_id}",
+        "select": "*",
+        "order": "updated_at.desc",
+    }
+    with httpx.Client(timeout=30.0) as client:
+        r = client.get(_records("chat_sessions"), headers=_headers(), params=params)
+        r.raise_for_status()
+        data = r.json()
+        return data if isinstance(data, list) else []
+
+
+def touch_chat_session(
+    *,
+    zep_thread_id: str,
+) -> None:
+    """Bump ``chat_sessions.updated_at`` after a new turn is appended."""
+    if not insforge_persistence_enabled():
+        return
+    from datetime import datetime, timezone
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    with httpx.Client(timeout=30.0) as client:
+        client.patch(
+            f"{_records('chat_sessions')}?zep_thread_id=eq.{zep_thread_id}",
+            headers=_headers(),
+            json={"updated_at": now_iso},
+        )
+
+
 def fetch_documents_registry(
     *,
     chart_subject_id: str | None = None,

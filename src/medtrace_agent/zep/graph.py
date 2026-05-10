@@ -19,15 +19,28 @@ def _edge_uuid(edge: Any) -> str:
     return getattr(edge, "uuid_", None) or getattr(edge, "uuid", "") or ""
 
 
-def list_recent_episodes(user_id: str, lastn: int = 25) -> pd.DataFrame:
+def list_recent_episodes(
+    user_id: str,
+    lastn: int = 25,
+    *,
+    truncate_chars: int | None = 200,
+) -> pd.DataFrame:
+    """Return recent Zep episodes as a DataFrame.
+
+    Streamlit's inspector wants short snippets (default ``truncate_chars=200``);
+    the FastAPI clinical router needs full content to run lab regex extraction
+    and passes ``truncate_chars=None`` to disable truncation.
+    """
     client = get_zep_client()
     resp = client.graph.episode.get_by_user_id(user_id, lastn=lastn)
     episodes = resp.episodes or []
     rows: list[dict[str, Any]] = []
     for ep in episodes:
-        content = (ep.content or "").replace("\n", " ")
-        if len(content) > 200:
-            content = content[:197] + "..."
+        raw = (ep.content or "").replace("\n", " ")
+        if truncate_chars and len(raw) > truncate_chars:
+            content = raw[: max(truncate_chars - 3, 0)] + "..."
+        else:
+            content = raw
         rows.append(
             {
                 "uuid": _episode_uuid(ep),
