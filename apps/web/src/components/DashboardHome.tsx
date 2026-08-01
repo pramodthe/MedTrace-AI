@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import {
   AlertTriangle,
   ArrowLeft,
@@ -78,6 +79,20 @@ function DashboardBody({
     ['Documents', `${patient.document_count} uploaded`],
     ['DOB', patient.dob ?? '-'],
   ];
+
+  // Interactive review checklist, keyed by item text so a snapshot refresh keeps state.
+  const [checkedItems, setCheckedItems] = useState<ReadonlySet<string>>(new Set());
+  const toggleChecklistItem = (item: string) => {
+    setCheckedItems((prev) => {
+      const next = new Set(prev);
+      if (next.has(item)) {
+        next.delete(item);
+      } else {
+        next.add(item);
+      }
+      return next;
+    });
+  };
 
   return (
     // xl layout: flex row with `gap-4` (1rem) between the dashboard column
@@ -347,28 +362,37 @@ function DashboardBody({
                 <FileText size={16} className="text-blue-300" />
               </div>
               <div className="grid gap-3">
-                {snapshot.doctor_checklist.map((item, index) => (
-                  <label key={item} className="group flex cursor-pointer items-start gap-3">
-                    <div
-                      className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
-                        index === 2 ? 'border-blue-500 bg-blue-500' : 'border-slate-700 group-hover:border-blue-500'
-                      }`}
-                    >
-                      {index === 2 ? (
-                        <Check size={12} className="text-white" />
-                      ) : (
-                        <div className="h-2 w-2 rounded-sm bg-blue-500 opacity-0 transition-opacity group-hover:opacity-30" />
-                      )}
-                    </div>
-                    <span
-                      className={`text-[12px] leading-5 ${
-                        index === 2 ? 'text-slate-500 line-through' : 'text-slate-300'
-                      }`}
-                    >
-                      {item}
-                    </span>
-                  </label>
-                ))}
+                {snapshot.doctor_checklist.map((item) => {
+                  const checked = checkedItems.has(item);
+                  return (
+                    <label key={item} className="group flex cursor-pointer items-start gap-3">
+                      <input
+                        type="checkbox"
+                        className="sr-only"
+                        checked={checked}
+                        onChange={() => toggleChecklistItem(item)}
+                      />
+                      <div
+                        className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border transition-all duration-200 ${
+                          checked ? 'border-blue-500 bg-blue-500' : 'border-slate-700 group-hover:border-blue-500'
+                        }`}
+                      >
+                        {checked ? (
+                          <Check size={12} className="scale-100 text-white transition-transform duration-200" />
+                        ) : (
+                          <div className="h-2 w-2 rounded-sm bg-blue-500 opacity-0 transition-opacity group-hover:opacity-30" />
+                        )}
+                      </div>
+                      <span
+                        className={`text-[12px] leading-5 transition-colors duration-200 ${
+                          checked ? 'text-slate-500 line-through' : 'text-slate-300'
+                        }`}
+                      >
+                        {item}
+                      </span>
+                    </label>
+                  );
+                })}
               </div>
             </section>
           </div>

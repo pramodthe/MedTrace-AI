@@ -3,7 +3,7 @@
  * Replaces the bespoke fetch wrappers the standalone radiology app used to carry.
  */
 
-import { API_BASE, apiGet, apiPost, apiUpload } from './api';
+import { API_BASE, apiGet, apiPost, uploadFiles } from './api';
 import type { ImagingStatus, ReportSource, RoiBox, Segmentation, StudyUpload } from './types';
 
 /** Server-relative asset paths (previews, mask overlays) need the API origin. */
@@ -12,9 +12,20 @@ export function absoluteAssetUrl(url: string | null | undefined): string | undef
   return url.startsWith('/') ? `${API_BASE}${url}` : url;
 }
 
-export async function uploadStudy(file: File, signal?: AbortSignal): Promise<StudyUpload> {
-  const study = await apiUpload<StudyUpload>('/api/studies', file, {}, signal);
-  return { ...study, preview_url: absoluteAssetUrl(study.preview_url) ?? null };
+/**
+ * Upload a study: one DICOM file, or a whole series.
+ *
+ * The route takes a repeated `files` field — a real CT/MR study is a folder of single-frame
+ * slices, and the volume/MPR path needs all of them.
+ */
+export async function uploadStudy(files: File[], signal?: AbortSignal): Promise<StudyUpload> {
+  const study = await uploadFiles<StudyUpload>('/api/studies', files, signal);
+  return {
+    ...study,
+    preview_url: absoluteAssetUrl(study.preview_url) ?? null,
+    dicom_url: absoluteAssetUrl(study.dicom_url) ?? null,
+    slice_urls: (study.slice_urls ?? []).map((u) => absoluteAssetUrl(u) ?? u),
+  };
 }
 
 export async function requestSegmentation(

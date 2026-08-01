@@ -46,6 +46,15 @@ def study_preview_url(study_id: str) -> str:
     return f"/data/studies/{study_id}/preview.png"
 
 
+def study_dicom_url(study_id: str, filename: str) -> str:
+    """URL of the original DICOM, which the viewer loads with Cornerstone3D.
+
+    Rendering happens client-side on the full bit depth, so the browser needs the source
+    file — not just the 8-bit preview PNG.
+    """
+    return f"/data/studies/{study_id}/{filename}"
+
+
 def study_image_path(study_id: str) -> Path:
     """Preview PNG if rendered, else the first image file in the study directory."""
     preview = study_preview_path(study_id)

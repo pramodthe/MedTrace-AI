@@ -202,10 +202,19 @@ class StudyOut(BaseModel):
     modality: str = "DICOM"
     body_part: str = "Unspecified"
     series: str = "Uploaded series"
+    #: Frame count. >1 means a volume the viewer can scroll through.
     slices: int = 1
     uploaded_file_name: str
     is_dicom: bool = True
+    #: 8-bit thumbnail for the study list / no-WebGL fallback.
     preview_url: str | None = None
+    #: Original DICOM (first slice), loaded client-side by Cornerstone3D.
+    dicom_url: str | None = None
+    #: Every slice of the series, already in anatomical order. Empty for a single file.
+    slice_urls: list[str] = Field(default_factory=list)
+    #: True when the series carries ImagePositionPatient/Orientation/PixelSpacing on every
+    #: slice — the precondition for building a volume and reslicing it (MPR).
+    has_volume_geometry: bool = False
 
 
 class SegmentationRequest(BaseModel):

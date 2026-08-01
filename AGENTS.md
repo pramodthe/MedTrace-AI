@@ -142,9 +142,8 @@ are logged, not raised, so imaging + health still come up without Zep.
 transport: `chat` (`/v1/chat/completions`, default) vs `completions`
 (`<image>`-prompt style). `FIREWORKS_REASONING_EFFORT=none` keeps Qwen3-style
 CoT out of `reasoning_content` so JSON/text lands in `content`. Any
-OpenAI-compatible endpoint works if you repoint the env vars — the README
-describes the sponsor vLLM/Hugging Face Spaces/AMD deployment story, but the
-code only cares about the base URL, model id and key.
+OpenAI-compatible endpoint works if you repoint the env vars (base URL,
+model id, and key) — including a self-hosted vLLM server.
 
 ### API (`apps/api/`)
 
@@ -179,14 +178,19 @@ pixels server-side.
 
 One design system (Tailwind v4 tokens in `src/index.css`, shadcn-style
 primitives in `src/components/ui/`), one typed client (`src/lib/api.ts` +
-`src/lib/imagingApi.ts`, base URL from `VITE_API_BASE_URL`, default
-`http://localhost:8001`), and `src/lib/types.ts` mirroring
-`apps/api/schemas.py`. Route components live in `src/components/imaging/` and
+`src/lib/imagingApi.ts`, same-origin by default — set `VITE_API_BASE_URL` only
+for a cross-origin API), and `src/lib/types.ts` mirroring `apps/api/schemas.py`.
+Route components live in `src/components/imaging/` and
 `src/components/session/`; dashboard components at `src/components/` top level.
 The session route is lazy-loaded because CopilotKit + tiptap add ~2 MB, and
-carries its own `session.css`; other routes are pure Tailwind. Vite proxies
-`/api/copilotkit` to the CopilotKit runtime (default `http://localhost:4000`)
-to keep the browser same-origin.
+carries its own `session.css`; other routes are pure Tailwind.
+
+**Vite proxies everything the browser needs**: `/api` and `/data` to the API
+(`VITE_API_PROXY_TARGET`, default `http://127.0.0.1:8001`) and
+`/api/copilotkit` to the CopilotKit runtime (default `http://localhost:4000`).
+The `/api/copilotkit` entry must stay first — Vite matches proxy entries in
+insertion order. `src/lib/api.ts` retries GETs on connection failure, because
+Vite is serving in ~200 ms while the API needs a second or two to listen.
 
 ## Conventions
 

@@ -1,8 +1,72 @@
 import { Minus, TrendingDown, TrendingUp } from 'lucide-react';
+import { Area, AreaChart, ReferenceLine, ResponsiveContainer, YAxis } from 'recharts';
 import type { LabTrend } from '@/lib/types';
 
 interface LabTrendsProps {
   labs: LabTrend[];
+}
+
+/** First numeric value embedded in a lab string like "142 mg/dL" or "7.2%". */
+function parseLabValue(raw: string | null): number | null {
+  if (!raw) return null;
+  const match = raw.replace(/,/g, '').match(/-?\d+(?:\.\d+)?/);
+  return match ? Number(match[0]) : null;
+}
+
+/** Reference range like "70-99" → [lo, hi], when parseable. */
+function parseRange(range: string | null): [number, number] | null {
+  const match = range?.match(/(-?\d+(?:\.\d+)?)\s*[-–]\s*(-?\d+(?:\.\d+)?)/);
+  return match ? [Number(match[1]), Number(match[2])] : null;
+}
+
+/**
+ * Two-point sparkline (previous → latest) for one analyte. LabTrend only carries
+ * latest/previous pairs, so a per-row mini chart fits the data shape better than a
+ * full multi-series trend chart. Stroke color mirrors the trend semantics and the
+ * --chart-* tokens in index.css.
+ */
+function LabSparkline({ lab }: { lab: LabTrend }) {
+  const latest = parseLabValue(lab.latest);
+  const previous = parseLabValue(lab.previous);
+  if (latest === null || previous === null) {
+    return <span className="text-[10px] text-slate-300">-</span>;
+  }
+
+  const color =
+    lab.trend === 'Worsening' ? '#ef4444' : lab.trend === 'Improving' ? '#22c55e' : '#0052cc';
+  const data = [
+    { i: 0, v: previous },
+    { i: 1, v: latest },
+  ];
+  const range = parseRange(lab.range);
+  const values = [previous, latest, ...(range ?? [])];
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const pad = (max - min) * 0.15 || 1;
+
+  return (
+    <div className="h-8 w-20" aria-hidden>
+      <ResponsiveContainer width="100%" height="100%">
+        <AreaChart data={data} margin={{ top: 2, right: 2, bottom: 2, left: 2 }}>
+          <YAxis hide domain={[min - pad, max + pad]} />
+          {range?.map((bound) => (
+            <ReferenceLine key={bound} y={bound} stroke="#cbd5e1" strokeDasharray="2 2" />
+          ))}
+          <Area
+            type="monotone"
+            dataKey="v"
+            stroke={color}
+            strokeWidth={1.5}
+            fill={color}
+            fillOpacity={0.12}
+            dot={{ r: 1.5, fill: color, strokeWidth: 0 }}
+            isAnimationActive
+            animationDuration={700}
+          />
+        </AreaChart>
+      </ResponsiveContainer>
+    </div>
+  );
 }
 
 export function LabTrends({ labs }: LabTrendsProps) {
@@ -27,6 +91,7 @@ export function LabTrends({ labs }: LabTrendsProps) {
                   <th className="pb-2 font-semibold">Metric</th>
                   <th className="pb-2 font-semibold">Value</th>
                   <th className="hidden pb-2 font-semibold sm:table-cell">Range</th>
+                  <th className="pb-2 font-semibold">Trace</th>
                   <th className="pb-2 font-semibold">Trend</th>
                 </tr>
               </thead>
@@ -54,6 +119,9 @@ export function LabTrends({ labs }: LabTrendsProps) {
                     </td>
                     <td className="hidden py-3 font-mono text-[11px] text-slate-500 sm:table-cell">
                       {lab.range ?? '-'}
+                    </td>
+                    <td className="py-3 pr-3">
+                      <LabSparkline lab={lab} />
                     </td>
                     <td
                       className={`py-3 flex items-center gap-1.5 ${
