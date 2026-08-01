@@ -28,7 +28,9 @@ def load_env_file(path: Path) -> None:
             os.environ[key] = value
 
 BACKEND_DIR = Path(__file__).resolve().parent
-load_env_file(BACKEND_DIR.parent / ".env")
+# Repo root is two levels up now that this service lives at services/radiology-api/.
+REPO_ROOT = BACKEND_DIR.parent.parent
+load_env_file(REPO_ROOT / ".env")
 load_env_file(BACKEND_DIR / ".env")
 
 app = FastAPI(title="Med AI Backend", version="0.1.0")
@@ -141,7 +143,7 @@ async def create_study(file: UploadFile = File(...)) -> dict:
 
 @app.get("/sample-studies/pre-liver")
 def load_pre_liver_sample() -> dict:
-    sample_dir = Path(__file__).resolve().parent.parent / "2.000000-PRE LIVER-76970"
+    sample_dir = REPO_ROOT / "2.000000-PRE LIVER-76970"
     dicom_files = sorted(sample_dir.glob("*.dcm"))
     if not dicom_files:
         raise FileNotFoundError(f"No DICOM files found in {sample_dir}")

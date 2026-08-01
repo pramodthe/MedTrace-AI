@@ -9,8 +9,8 @@ This is a monorepo containing a **radiology AI workflow dashboard** with a React
 ## Architecture
 
 ```
-frontend/          React 19 + Vite + TypeScript + TailwindCSS + Lucide
-backend/            FastAPI Python API
+apps/radiology-web/       React 19 + Vite + TypeScript + TailwindCSS + Lucide
+services/radiology-api/    FastAPI Python API
 ├── app.py          Main routes and CORS config
 ├── model_adapters/ AI model service wrappers
 │   ├── medsam2.py  Segmentation (MedSAM2Service)
@@ -20,7 +20,7 @@ backend/            FastAPI Python API
 
 ### Frontend Structure
 
-- **Single-file SPA**: All components defined in `frontend/src/App.tsx` (StudyPanel, ViewerWorkspace, DecisionPanel, FeedbackModal, overlays)
+- **Single-file SPA**: All components defined in `apps/radiology-web/src/App.tsx` (StudyPanel, ViewerWorkspace, DecisionPanel, FeedbackModal, overlays)
 - **Three-panel layout**: Study list (left) | Image viewer with ROI drawing (center) | Report & review (right)
 - **ROI coordinate system**: Normalized 0-1 values; converted to pixel coordinates by the backend
 - **API base URL**: `http://127.0.0.1:8000` by default; override with `VITE_API_BASE_URL`
@@ -35,25 +35,24 @@ Both `MedSAM2Service` and `MedGemmaService` support three modes (checked in orde
 
 ## Commands
 
+> Tip: from the repo root, `npm run dev` boots the whole monorepo (both stacks) at once. The per-service commands below are for running just the radiology stack.
+
 ### Backend
 ```bash
-cd backend
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn app:app --reload --host 127.0.0.1 --port 8000
+# from repo root (shared venv at .venv):
+.venv/bin/uvicorn app:app --app-dir services/radiology-api --reload --host 127.0.0.1 --port 8000
 ```
 
 ### Frontend
 ```bash
-cd frontend
-npm install
-npm run dev          # Development server
-npm run build         # Production build
+npm --prefix apps/radiology-web install
+npm --prefix apps/radiology-web run dev     # Development server (port 5173)
+npm --prefix apps/radiology-web run build   # Production build
 ```
 
 ### Environment Variables
 
-**Backend** (`backend/.env`):
+**Backend** (`services/radiology-api/.env`, or the repo-root `.env`):
 - `NEBIUS_API_KEY` — enables Qwen VL reporting (without this, runs in mock mode)
 - `NEBIUS_BASE_URL` — default `https://api.tokenfactory.nebius.com/v1`
 - `NEBIUS_QWEN_VL_MODEL` — default `Qwen/Qwen2.5-VL-72B-Instruct`
@@ -77,12 +76,12 @@ npm run build         # Production build
 
 - DICOM files are read server-side with `pydicom`
 - Pixel values are rescaled using `RescaleSlope`/`RescaleIntercept` and windowed using `WindowCenter`/`WindowWidth`
-- Preview PNG is generated at `backend/data/studies/{study_id}/preview.png` and served statically at `/data/studies/`
+- Preview PNG is generated at `services/radiology-api/data/studies/{study_id}/preview.png` and served statically at `/data/studies/`
 - Studies without DICOM (local images) use `URL.createObjectURL` on the frontend
 
 ## Important Notes
 
 - ROI prompts are normalized (0-1 range) and should be drawn on the image viewport; backend converts to pixel coordinates
 - Report generation requires explicit doctor acceptance — the UI enforces this workflow
-- `backend/data/studies/` is gitignored; it contains all uploaded patient data
+- `services/radiology-api/data/studies/` is gitignored; it contains all uploaded patient data
 - When `NEBIUS_API_KEY` is not set, the system runs in mock mode with deterministic fake outputs
