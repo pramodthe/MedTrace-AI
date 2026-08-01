@@ -1,6 +1,76 @@
-# Medtrace Agent —
+<p align="center">
+  <img src="docs/assets/banner.jpg" alt="MedTrace AI — Clinical cognitive aid" width="100%" />
+</p>
+
+# MedTrace AI
 
 **“clinical decision support” or “cognitive aid”**: not replacing the doctor, but surfacing **patterns, timelines, and test ideas** the clinician still validates.
+
+> Demo / educational project — **not** a certified medical device. Agent and vision-ingest output are demo-grade cognitive aids.
+
+<p align="center">
+  <a href="#status-at-a-glance"><img src="https://img.shields.io/badge/status-hackathon%20demo-0052CC?style=for-the-badge" alt="Status: hackathon demo" /></a>
+  <a href="pyproject.toml"><img src="https://img.shields.io/badge/python-3.11%2B-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.11+" /></a>
+  <a href="apps/api"><img src="https://img.shields.io/badge/API-FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white" alt="FastAPI" /></a>
+  <a href="apps/web"><img src="https://img.shields.io/badge/web-React%2019-149ECA?style=for-the-badge&logo=react&logoColor=white" alt="React 19" /></a>
+  <a href="#sponsors--inference-stack"><img src="https://img.shields.io/badge/inference-AMD%20%7C%20HF%20%7C%20vLLM-ED1C24?style=for-the-badge" alt="Inference stack" /></a>
+  <a href="#running-minimal"><img src="https://img.shields.io/badge/local%20mock-supported-22c55e?style=for-the-badge" alt="Local mock supported" /></a>
+</p>
+
+**Topics:** clinical AI · long-term memory · temporal knowledge graph · PDF vision ingest · DICOM imaging · voice consultation · human-in-the-loop review
+
+---
+
+## Contents
+
+- [Status at a glance](#status-at-a-glance)
+- [Product surfaces](#product-surfaces)
+- [Monorepo layout & running everything](#monorepo-layout--running-everything)
+- [Sponsors & inference stack](#sponsors--inference-stack)
+- [Architecture](#architecture)
+- [LLM model](#llm-model)
+- [High-level picture](#high-level-picture)
+- [AI agent architecture](#ai-agent-architecture)
+- [Repository layout](#repository-layout)
+- [Module responsibilities](#module-responsibilities)
+- [Zep: thread vs graph](#zep-thread-vs-graph)
+- [Chat turn sequence](#chat-turn-sequence)
+- [PDF ingest sequence](#pdf-ingest-sequence)
+- [Document ingestion architecture](#document-ingestion-architecture)
+- [Vision ingest risks](#vision-ingest-risks)
+- [Session state (important caveats)](#session-state-important-caveats)
+- [Configuration](#configuration)
+- [Running (minimal)](#running-minimal)
+- [Dependency stack](#dependency-stack)
+- [Related worktrees & branches](#related-worktrees--branches)
+- [License](#license)
+
+---
+
+## Status at a glance
+
+| Area | State | Notes |
+|------|--------|--------|
+| Clinical dashboard (`/`, `/patients/:id`) | **Implemented** | Patients, documents, chat threads, derived clinical views |
+| Imaging (`/imaging`) | **Implemented** | DICOM upload, MedSAM2 segmentation, draft reports — **mock without secrets** |
+| Voice session (`/session`) | **Prototype** | Needs `npm run dev:transcription` (ports 8010 + 4000) |
+| Local mock (`MEDTRACE_LOCAL_MOCK=1`) | **Implemented** | File-backed InsForge stand-in; chat/ingest still need LLM + Zep keys |
+| Sponsor inference (AMD / HF / vLLM) | **Documented path** | App talks OpenAI-compatible HTTP; Fireworks or Spaces work interchangeably |
+| Certified medical device | **Out of scope** | Educational / demo CDS only |
+
+---
+
+## Product surfaces
+
+| Surface | Path | Port | Role |
+|---------|------|------|------|
+| **API** | `apps/api/` (`apps.api.main:app`) | **8001** | Clinical + imaging in one FastAPI service |
+| **Web** | `apps/web/` | **3000** | Dashboard, imaging viewer, voice session |
+| **Transcription** | `services/transcription/` | **8010** + **4000** | Optional LangGraph + CopilotKit prototype for `/session` |
+
+Shared Python package: `src/medtrace_agent/` (installable as **`medtrace-agent`**).
+
+---
 
 ## Monorepo layout & running everything
 
@@ -33,22 +103,79 @@ cp .env.example .env
 npm run dev          # api on 8001, web on 3000
 ```
 
+**Windows (PowerShell) notes:** use `.venv\Scripts\pip.exe` and `.venv\Scripts\uvicorn.exe` if `npm run dev:api` fails on Unix-style `.venv/bin/...` paths. Vite binds **`localhost` (IPv6)** — open `http://localhost:3000`, not only `127.0.0.1`.
+
 Other scripts: `npm run dev:api`, `npm run dev:web`, `npm run dev:transcription`,
 `npm run lint`, `npm run build`, `npm run test:py`.
 
+---
+
 ## Sponsors & inference stack
 
-This project highlights an inference stack built with **sponsor** technologies:
+This project highlights an inference stack built with **sponsor** technologies, plus the product partners that power memory, serverless LLM defaults, and durable storage in the monorepo.
 
-- **[AMD](https://www.amd.com/)** — **GPU acceleration for fine-tuning** our **custom** clinical models and for **high-throughput inference** when serving checkpoints.
-- **[Hugging Face](https://huggingface.co/)** — model artifacts, hub distribution, and **[Spaces](https://huggingface.co/docs/hub/spaces)** deployment for the **OpenAI-compatible** endpoints this app calls.
-- **[vLLM](https://docs.vllm.ai/en/latest/)** — we serve models behind LangChain using vLLM’s **[OpenAI-compatible server](https://docs.vllm.ai/en/latest/serving/openai_compatible_server/)** (`/v1/chat/completions` and related routes), so **`ChatOpenAI`** works without a vendor-specific SDK.
+<p align="center">
+  <a href="https://www.amd.com/"><img src="docs/assets/sponsors/amd.svg" alt="AMD" height="40" /></a>
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://huggingface.co/"><img src="docs/assets/sponsors/huggingface.svg" alt="Hugging Face" height="40" /></a>
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://docs.vllm.ai/en/latest/"><img src="https://img.shields.io/badge/vLLM-OpenAI%20compatible-3776AB?style=for-the-badge&logo=pytorch&logoColor=white" alt="vLLM" /></a>
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://www.getzep.com/"><img src="https://img.shields.io/badge/Zep%20Cloud-memory%20%2B%20graph-7C3AED?style=for-the-badge" alt="Zep Cloud" /></a>
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://fireworks.ai/"><img src="https://img.shields.io/badge/Fireworks%20AI-LLM%20%2F%20VLM-FF5A00?style=for-the-badge" alt="Fireworks AI" /></a>
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://insforge.dev/"><img src="https://img.shields.io/badge/InsForge-Postgres%20%2B%20Storage-0EA5E9?style=for-the-badge" alt="InsForge" /></a>
+</p>
+
+### What each sponsor / partner does in MedTrace
+
+| Partner | Logo | Role in this repo | Why it matters |
+|---------|------|-------------------|----------------|
+| **[AMD](https://www.amd.com/)** | <img src="docs/assets/sponsors/amd.svg" alt="AMD" height="28" /> | **GPU acceleration for fine-tuning** our **custom** clinical models and for **high-throughput inference** when serving checkpoints | Sponsor compute path for MedGemma-class models and production-style serving |
+| **[Hugging Face](https://huggingface.co/)** | <img src="docs/assets/sponsors/huggingface.svg" alt="Hugging Face" height="28" /> | Model artifacts, hub distribution, and **[Spaces](https://huggingface.co/docs/hub/spaces)** deployment for the **OpenAI-compatible** endpoints this app calls | Weights live on the Hub; Spaces host the OpenAI-style API the agents call |
+| **[vLLM](https://docs.vllm.ai/en/latest/)** | [docs](https://docs.vllm.ai/en/latest/) | We serve models behind LangChain using vLLM’s **[OpenAI-compatible server](https://docs.vllm.ai/en/latest/serving/openai_compatible_server/)** (`/v1/chat/completions` and related routes), so **`ChatOpenAI`** works without a vendor-specific SDK | One HTTP shape for chat + multimodal PDF page vision |
+| **[Zep Cloud](https://www.getzep.com/)** | [site](https://www.getzep.com/) | Long-term **thread** memory + temporal **knowledge graph** (episodes, ontology, facts) | Patient-scoped context for RAG chat and Deep Agent tools |
+| **[Fireworks AI](https://fireworks.ai/)** | [site](https://fireworks.ai/) | Default **OpenAI-compatible** serverless chat + vision keys in `.env.example` (`FIREWORKS_*`) when not pointing at a HF Space | Fast local demo path without self-hosting vLLM |
+| **[InsForge](https://insforge.dev/)** | [site](https://insforge.dev/) | Durable document registry, app metadata, and Storage; **or** `MEDTRACE_LOCAL_MOCK=1` file store | Charts/documents without mirroring clinical facts in SQL |
 
 Chat and **PDF page vision** (multimodal messages for structured extraction) both target the same style of endpoint: a **Hugging Face Space** (or compatible host) running **vLLM** on **AMD** hardware.
 
 Authentication for those endpoints is **optional** whenever your Space or gateway does not require a key; add a bearer token or API key only if your deployment enforces it (see [Configuration](#configuration)).
 
-#  Architecture
+### Inference path (sponsor stack)
+
+```text
+Clinician UI (apps/web)
+        │
+        ▼
+FastAPI (apps/api)  ──►  medtrace_agent agents / ingest
+        │                         │
+        │                         ├── ChatOpenAI ──► OpenAI-compatible /v1
+        │                         │                      │
+        │                         │         ┌────────────┴────────────┐
+        │                         │         ▼                         ▼
+        │                         │   HF Space + vLLM on AMD    Fireworks serverless
+        │                         │
+        └── Zep threads + graph ◄─┘
+            InsForge / local_mock registry
+```
+
+### Stack badges (core runtime)
+
+<p align="left">
+  <img src="docs/assets/sponsors/python.svg" alt="Python" height="28" />
+  &nbsp;
+  <img src="docs/assets/sponsors/fastapi.svg" alt="FastAPI" height="28" />
+  &nbsp;
+  <img src="docs/assets/sponsors/react.svg" alt="React" height="28" />
+  &nbsp;
+  <img src="docs/assets/sponsors/langchain.svg" alt="LangChain" height="28" />
+</p>
+
+---
+
+# Architecture
 
 Clinical demo that combines **Zep Cloud** (long-term memory + temporal knowledge graph) with **`ChatOpenAI`** pointed at an **OpenAI-compatible** endpoint. The **custom** [**MedGemma 1.5 4B IT (GGUF)**](https://huggingface.co/gguf-org/medgemma-1.5-4b-it-gguf) checkpoint (`gguf-org/medgemma-1.5-4b-it-gguf` on Hugging Face) is **fine-tuned** on **AMD** GPUs; we **deploy** inference on **[Hugging Face Spaces](https://huggingface.co/docs/hub/spaces)** behind **[vLLM’s OpenAI-compatible server](https://docs.vllm.ai/en/latest/serving/openai_compatible_server/)** for both chat and multimodal PDF ingest. Details: [LLM model](#llm-model) and [Sponsors & inference stack](#sponsors--inference-stack).
 
@@ -191,6 +318,11 @@ flowchart TB
 | `apps/web/` | React app: dashboard, imaging viewer, session route. |
 | `tests/` | Pytest suite (`pip install -e ".[dev]"` includes pytest). |
 | `data/` | Sample note paths (PDFs/notes gitignored; keep `.gitkeep` where needed). |
+| `docs/assets/` | README banner, sponsor logos, and other documentation media. |
+| `migrations/` | InsForge SQL migrations (schema, RLS, metadata, demo-mode). |
+| `mock/patient_data/` | Synthetic patient JSON fixtures (seed source for local mock). |
+| `scripts/` | Ontology apply, note ingest, seeding, local-mock reset, model probe. |
+| `services/transcription/` | Voice/CopilotKit prototype for `/session`. |
 
 ## Module responsibilities
 
@@ -318,7 +450,6 @@ flowchart TB
 | `data/radiology_note/*.txt`   | `radiology_note`                | `[RadiologyNote …]`    |
 | `data/session_note/*.txt`     | `session_note`                  | `[SessionNote …]`      |
 
-
 ## Vision ingest risks
 
 Vision models can **misread numbers** or **hallucinate** structured fields. Treat output as **demo-grade** unless validated. Not a certified medical device or OCR pipeline.
@@ -340,6 +471,7 @@ See **`.env.example`** for exact variable names and defaults.
 
 - Set the **chat** base URL, model id, and any **bearer token / API key** only if your **Hugging Face Space** or gateway requires them; **vLLM** deployments often need **no** client secret when the Space is public.
 - For **PDF page vision**, configure the vision base URL, multimodal model id, and API mode (`chat` vs `completions`-style prompts) as documented in **`.env.example`**. Those requests hit the same **[OpenAI-compatible vLLM server](https://docs.vllm.ai/en/latest/serving/openai_compatible_server/)** pattern as chat, backed by our **AMD** / **Hugging Face** sponsor deployment path.
+- Practical defaults in `.env.example` also document **Fireworks AI** (`FIREWORKS_API_KEY`, `FIREWORKS_BASE_URL`, `FIREWORKS_MODEL`, `FIREWORKS_VL_MODEL`, `FIREWORKS_VLM_API`) as a serverless OpenAI-compatible alternative to self-hosted Spaces.
 
 **PDF rasterization**
 
@@ -351,6 +483,17 @@ Clinical reasoning / PubMed (optional):
 
 - `**NCBI_EMAIL**` — recommended for NCBI E-utilities etiquette.
 - `**NCBI_API_KEY**` — optional; higher rate limits.
+
+**InsForge / local mock**
+
+- `MEDTRACE_LOCAL_MOCK=1` — offline dashboard without InsForge (seeds `data/local_mock/`).
+- Or set `INSFORGE_URL`, `INSFORGE_ANON_KEY`, `INSFORGE_API_KEY`, `INSFORGE_PROFILE_ID`, `INSFORGE_DOCUMENTS_BUCKET`.
+
+**Voice session (`/session`, optional)**
+
+- `GEMINI_API_KEY` — transcription / diarization path used by the transcription service.
+- `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `OPENAI_MODEL` — report agent (OpenAI-compatible; can point at Fireworks).
+- Spoken TTS (`tts-1`) expects a genuine OpenAI endpoint when enabled.
 
 ## Running (minimal)
 
@@ -370,6 +513,12 @@ Run tests:
 pytest -m "not integration"
 ```
 
+Optional full stack including voice:
+
+```bash
+npm run dev:transcription   # transcription API :8010 + CopilotKit :4000
+```
+
 ## Dependency stack
 
 - **zep-cloud** (v3) — `Zep` client, thread + graph APIs  
@@ -379,4 +528,26 @@ pytest -m "not integration"
 - **pydantic** — validate multimodal page-extract JSON before Zep ingest  
 - **vLLM** (inference server) — OpenAI-compatible serving on **[Hugging Face Spaces](https://huggingface.co/docs/hub/spaces)** with **AMD** acceleration (see [Sponsors & inference stack](#sponsors--inference-stack))  
 - **deepagents** — optional Deep Agent chat path (`medtrace_agent.agents.deep_clinical`)
+- **fastapi** / **uvicorn** — `apps/api` service
+- **React 19** + **Vite 6** + **Tailwind v4** — `apps/web`
 
+---
+
+## Related worktrees & branches
+
+This machine may have additional git worktrees of the same monorepo with experimental or PR-scoped work. They are **not** required to run the default demo above.
+
+| Worktree / branch (examples) | Focus (from that tree’s README / branch name) |
+|------------------------------|-----------------------------------------------|
+| Primary repo (this tree) | Consolidated API + web + local mock + imaging/session |
+| `MedTrace-AI-yc-demo` / `codex/medplum-clinical-core` | YC Medplum / FHIR R4 clinical-core experiments |
+| Temp PR worktrees (e.g. `medtrace-pr3-fix-*`) | Merge-fix branches for open PRs |
+| `codex/session-viewport-frame` | Session workspace viewport layout fix |
+
+If a worktree documents **Medplum FHIR R4** as the clinical store, that describes **that branch’s architecture**. This README tracks the **current tree**: Zep-derived clinical views + InsForge/local-mock registry (no Medplum requirement).
+
+---
+
+## License
+
+No license file is currently checked in. Treat the repository as proprietary / all-rights-reserved unless a `LICENSE` is added.
