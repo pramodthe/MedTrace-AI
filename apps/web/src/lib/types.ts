@@ -191,7 +191,14 @@ export interface StudyUpload {
   slices: number;
   uploaded_file_name: string;
   is_dicom: boolean;
+  /** 8-bit thumbnail for the study list and the no-WebGL fallback. */
   preview_url?: string | null;
+  /** Original DICOM (first slice), loaded client-side by Cornerstone3D. */
+  dicom_url?: string | null;
+  /** Every slice of the series in anatomical order; empty for a single file. */
+  slice_urls?: string[];
+  /** True when every slice carries position/orientation/spacing — the precondition for MPR. */
+  has_volume_geometry?: boolean;
 }
 
 /** Client-side study: the server payload plus local review state. */

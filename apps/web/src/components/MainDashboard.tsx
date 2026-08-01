@@ -9,6 +9,16 @@ import {
   TriangleAlert,
   UserRound,
 } from 'lucide-react';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { usePatients } from '@/hooks/usePatients';
 import type { Patient, RiskLevel } from '@/lib/types';
 
@@ -26,10 +36,17 @@ export function MainDashboard({ onSelectPatient }: MainDashboardProps) {
   const { patients, loading, error, refresh, createPatient } = usePatients();
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [displayName, setDisplayName] = useState('');
 
-  const handleAddPatient = async () => {
-    const display = window.prompt('New patient display name?');
-    if (!display) return;
+  const openDialog = () => {
+    setCreateError(null);
+    setDialogOpen(true);
+  };
+
+  const handleCreatePatient = async () => {
+    const display = displayName.trim();
+    if (!display || creating) return;
     const slug = display
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')
@@ -40,6 +57,8 @@ export function MainDashboard({ onSelectPatient }: MainDashboardProps) {
     setCreateError(null);
     try {
       const created = await createPatient({ zep_user_id: zepUserId, display_name: display });
+      setDialogOpen(false);
+      setDisplayName('');
       onSelectPatient(created.id);
     } catch (err) {
       setCreateError((err as Error).message);
@@ -64,7 +83,7 @@ export function MainDashboard({ onSelectPatient }: MainDashboardProps) {
         <button
           type="button"
           disabled={creating}
-          onClick={handleAddPatient}
+          onClick={openDialog}
           className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20 disabled:opacity-60"
         >
           {creating ? <Loader2 size={16} className="animate-spin" /> : <Plus size={16} />}
@@ -72,7 +91,7 @@ export function MainDashboard({ onSelectPatient }: MainDashboardProps) {
         </button>
       </header>
 
-      {createError && (
+      {createError && !dialogOpen && (
         <div className="mb-4 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
           <TriangleAlert size={14} className="mt-0.5 shrink-0" />
           <div>
@@ -127,6 +146,64 @@ export function MainDashboard({ onSelectPatient }: MainDashboardProps) {
           </div>
         )}
       </section>
+
+      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Add new patient</DialogTitle>
+            <DialogDescription>
+              Creates a chart and a Zep memory user for the patient.
+            </DialogDescription>
+          </DialogHeader>
+
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              void handleCreatePatient();
+            }}
+            className="grid gap-3"
+          >
+            <div className="grid gap-1.5">
+              <label htmlFor="new-patient-name" className="text-xs font-semibold text-slate-600">
+                Display name
+              </label>
+              <Input
+                id="new-patient-name"
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                placeholder="e.g. Jane Doe"
+                autoFocus
+                disabled={creating}
+              />
+            </div>
+
+            {createError && (
+              <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                <TriangleAlert size={14} className="mt-0.5 shrink-0" />
+                <div>
+                  <p className="font-semibold">Could not create patient</p>
+                  <p>{createError}</p>
+                </div>
+              </div>
+            )}
+
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setDialogOpen(false)}
+                disabled={creating}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" disabled={!displayName.trim() || creating}>
+                {creating ? <Loader2 size={14} className="animate-spin" /> : null}
+                Create patient
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

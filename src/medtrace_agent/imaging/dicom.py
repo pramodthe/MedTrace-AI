@@ -24,6 +24,10 @@ def is_dicom_file(path: Path) -> bool:
 def render_dicom_preview(dicom_path: Path, study_dir: Path) -> dict[str, Any]:
     """Write ``preview.png`` into ``study_dir`` and return the study metadata.
 
+    The PNG is a **thumbnail only** — an 8-bit projection of the middle frame. The viewer
+    loads the original DICOM with Cornerstone3D so window/level operates on the full bit
+    depth; this preview exists for the study list and as a no-WebGL fallback.
+
     Pixels are rescaled with ``RescaleSlope``/``RescaleIntercept`` and windowed with
     ``WindowCenter``/``WindowWidth`` when present, else stretched to the 1–99 percentile.
     """
@@ -39,8 +43,12 @@ def render_dicom_preview(dicom_path: Path, study_dir: Path) -> dict[str, Any]:
     dataset = pydicom.dcmread(dicom_path)
     pixels = dataset.pixel_array.astype("float32")
 
+    # Multi-frame studies are volumes. Thumbnail the middle frame — frame 0 of a CT/MR
+    # stack is usually an end slice with little anatomy in it.
+    frame_count = 1
     if pixels.ndim > 2:
-        pixels = pixels[0]
+        frame_count = int(pixels.shape[0])
+        pixels = pixels[frame_count // 2]
 
     slope = float(getattr(dataset, "RescaleSlope", 1))
     intercept = float(getattr(dataset, "RescaleIntercept", 0))
@@ -66,11 +74,14 @@ def render_dicom_preview(dicom_path: Path, study_dir: Path) -> dict[str, Any]:
     study_dir.mkdir(parents=True, exist_ok=True)
     image.save(study_dir / "preview.png")
 
+    # NumberOfFrames is authoritative when present; fall back to the pixel array shape.
+    frames = int(getattr(dataset, "NumberOfFrames", 0) or 0) or frame_count
+
     return {
         "patient_name": str(getattr(dataset, "PatientName", "Uploaded Study")).replace("^", " "),
         "patient_detail": str(getattr(dataset, "PatientID", "DICOM metadata")),
         "modality": str(getattr(dataset, "Modality", "DICOM")),
         "body_part": str(getattr(dataset, "BodyPartExamined", "Unspecified")).title(),
         "series": str(getattr(dataset, "SeriesDescription", "DICOM series")),
-        "slices": 1,
+        "slices": frames,
     }

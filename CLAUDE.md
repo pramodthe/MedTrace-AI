@@ -140,9 +140,17 @@ file mirroring `apps/api/schemas.py` (`src/lib/types.ts`).
 
 The `/session` route carries its own `session.css`; the other routes are pure Tailwind.
 
+**The browser only ever talks to port 3000.** Vite proxies `/api` and `/data` to the API
+(`VITE_API_PROXY_TARGET`, default `http://127.0.0.1:8001`) and `/api/copilotkit` to the CopilotKit
+runtime. `/api/copilotkit` must stay the first proxy entry — Vite matches them in insertion order.
+`VITE_API_BASE_URL` is empty by default and only needed for a cross-origin API.
+
 ## Non-obvious gotchas
 
 - **Vite binds `localhost` (IPv6)** — health-check with `curl http://localhost:3000`, not `127.0.0.1`.
+- **The API binds `127.0.0.1` (IPv4 only)** while macOS resolves `localhost` to `::1` first, so the
+  browser must reach it through the Vite proxy, not directly. `src/lib/api.ts` also retries GETs on
+  connection failure: Vite serves in ~200 ms, the API needs a second or two to start listening.
 - **`.env` inline comments break values**: dotenv treats `KEY=value  # note` as part of the value.
   Put comments on their own lines.
 - **The `/session` route needs two extra processes** (`npm run dev:transcription`) and uses

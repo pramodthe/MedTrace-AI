@@ -10,6 +10,19 @@ import {
 } from '@copilotkit/react-core/v2';
 import { EditorContent, useEditor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
+import {
+  FileText,
+  Loader2,
+  Mic,
+  Pause,
+  Play,
+  Send,
+  Sparkles,
+  Square,
+  TriangleAlert,
+  Upload,
+  User,
+} from 'lucide-react';
 
 import '@copilotkit/react-core/v2/styles.css';
 import './session.css';
@@ -506,26 +519,30 @@ function DocumentEditor() {
                   {isRecording ? (
                     <button
                       type="button"
-                      className="stitch-action-pill stop-rec"
+                      className="stitch-action-pill stop-rec inline-flex items-center gap-1.5"
                       onClick={stopRecording}
                     >
-                      ⏹ Stop ({formatTime(recordingTime)})
+                      <Square size={11} fill="currentColor" /> Stop ({formatTime(recordingTime)})
                     </button>
                   ) : isUploading ? (
-                    <button type="button" className="stitch-action-pill stop-rec" disabled>
-                      Transcribing…
+                    <button
+                      type="button"
+                      className="stitch-action-pill stop-rec inline-flex items-center gap-1.5"
+                      disabled
+                    >
+                      <Loader2 size={12} className="animate-spin" /> Transcribing…
                     </button>
                   ) : (
                     <button
                       type="button"
-                      className="stitch-action-pill start-rec"
+                      className="stitch-action-pill start-rec inline-flex items-center gap-1.5"
                       onClick={startRecording}
                     >
-                      🎙️ Record
+                      <Mic size={13} /> Record
                     </button>
                   )}
-                  <label className="stitch-action-pill outline cursor-pointer">
-                    📁 Upload
+                  <label className="stitch-action-pill outline cursor-pointer inline-flex items-center gap-1.5">
+                    <Upload size={13} /> Upload
                     <input
                       type="file"
                       accept="audio/*"
@@ -550,7 +567,11 @@ function DocumentEditor() {
                       !sessionHasAudio && !isRecording ? 'Add audio to enable playback' : undefined
                     }
                   >
-                    {playingSessionId === activeSession.id ? '⏸' : '▶'}
+                    {playingSessionId === activeSession.id ? (
+                      <Pause size={12} fill="currentColor" />
+                    ) : (
+                      <Play size={12} fill="currentColor" className="ml-px" />
+                    )}
                   </button>
                 </div>
 
@@ -619,8 +640,8 @@ function DocumentEditor() {
                       className={`transcript-bubble-wrapper ${line.speaker.toLowerCase()}`}
                     >
                       <div className="bubble-meta">
-                        <div className="bubble-avatar">
-                          {line.speaker === 'Clinician' ? '✨' : '👤'}
+                        <div className="bubble-avatar inline-flex items-center justify-center">
+                          {line.speaker === 'Clinician' ? <Sparkles size={10} /> : <User size={10} />}
                         </div>
                         <span className="speaker-name">{line.speaker}</span>
                       </div>
@@ -639,7 +660,7 @@ function DocumentEditor() {
               <h3 className="panel-section-title">AI Insights</h3>
               <button
                 type="button"
-                className="stitch-action-pill start-rec"
+                className="stitch-action-pill start-rec inline-flex items-center gap-1.5"
                 onClick={handleGenerateReport}
                 disabled={isGeneratingReport || isLoading || !editor || !canvasHasContent}
                 title={
@@ -648,7 +669,15 @@ function DocumentEditor() {
                     : undefined
                 }
               >
-                {isGeneratingReport ? '⏳ Working…' : '📋 Generate report'}
+                {isGeneratingReport ? (
+                  <>
+                    <Loader2 size={13} className="animate-spin" /> Working…
+                  </>
+                ) : (
+                  <>
+                    <FileText size={13} /> Generate report
+                  </>
+                )}
               </button>
             </div>
             {reportActionMsg && (
@@ -666,7 +695,9 @@ function DocumentEditor() {
             </div>
 
             <div className="stitch-disclaimer-banner">
-              <span className="disclaimer-icon">⚠️</span>
+              <span className="disclaimer-icon inline-flex items-center">
+                <TriangleAlert size={14} />
+              </span>
               <p className="disclaimer-text">
                 This demonstration is for illustrative purposes only. It does not represent a
                 finished or approved product and is not intended to diagnose or suggest treatment.
@@ -688,7 +719,9 @@ function DocumentEditor() {
               ×
             </button>
             <div className="bubble-header">
-              <span className="bubble-sparkle-icon">✨</span>
+              <span className="bubble-sparkle-icon inline-flex items-center">
+                <Sparkles size={12} />
+              </span>
               <span className="bubble-speaker-title">AI CONSULTANT</span>
               {isLoading && <span className="bubble-typing-indicator">Drafting report…</span>}
             </div>
@@ -710,7 +743,9 @@ function DocumentEditor() {
       </div>
 
       <div className="stitch-docked-command-bar">
-        <span className="command-sparkle">✨</span>
+        <span className="command-sparkle inline-flex items-center">
+          <Sparkles size={13} />
+        </span>
         <input
           type="text"
           className="command-input"
@@ -728,7 +763,7 @@ function DocumentEditor() {
           onClick={handleSendCommand}
           disabled={isLoading}
         >
-          {isLoading ? '⚡' : '▶'}
+          {isLoading ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
         </button>
       </div>
     </div>
