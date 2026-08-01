@@ -1,17 +1,27 @@
 import base64
 import os
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from pathlib import Path
+
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 from fastapi.middleware.cors import CORSMiddleware
-from copilotkit import LangGraphAGUIAgent
-from ag_ui_langgraph import add_langgraph_fastapi_endpoint
-from agent import graph
-from voice_handler import VoicePipeline
-from database import save_session, get_all_sessions, update_session_report
-from datetime import datetime
-import uuid
 from dotenv import load_dotenv
-load_dotenv()
+
+# The dev script runs this from services/transcription/backend, so a bare load_dotenv()
+# looks for a .env in *that* directory and silently misses the repo-root one where every
+# other service reads its config. Load the repo root explicitly, then any local override.
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+load_dotenv(_REPO_ROOT / ".env", override=True)
+load_dotenv(_REPO_ROOT / ".env.local", override=True)
+load_dotenv(Path(__file__).resolve().parent / ".env", override=True)
+
+from copilotkit import LangGraphAGUIAgent  # noqa: E402
+from ag_ui_langgraph import add_langgraph_fastapi_endpoint  # noqa: E402
+from agent import graph  # noqa: E402
+from voice_handler import VoicePipeline  # noqa: E402
+from database import save_session, get_all_sessions, update_session_report  # noqa: E402
+from datetime import datetime  # noqa: E402
+import uuid  # noqa: E402
 
 DATA_REPORTS_DIR = os.path.join(os.path.dirname(__file__), "data", "reports")
 
@@ -64,13 +74,19 @@ async def save_session_endpoint(request: SaveSessionRequest):
         if not transcript or len(transcript.strip()) < 2:
             transcript = "Could not transcribe audio clearly."
         
-        # Generate report using co-editor LangGraph agent
+        session_id = str(uuid.uuid4())
+
+        # Generate report using co-editor LangGraph agent.
+        # Each recording is its own conversation: the default shared "voice_session" thread
+        # accumulates state across every upload, and a run that dies between a tool_call and
+        # its tool response leaves a checkpoint the model rejects ("tool_call_ids did not have
+        # response messages") — wedging every later recording until the process restarts.
         agent_result = await pipeline.run_agent_pipeline(
             text=f"Please write a structured report based on this transcribed input: {transcript}",
-            document=""
+            document="",
+            thread_id=f"session_{session_id}",
         )
-        
-        session_id = str(uuid.uuid4())
+
         timestamp = datetime.now().isoformat()
         
         # Persist to SQLite
@@ -231,5 +247,6 @@ async def websocket_voice_endpoint(websocket: WebSocket):
 
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.environ.get("PORT", 8000))
+    # 8010 matches npm run dev:transcription; the old 8000 default collided with other services.
+    port = int(os.environ.get("PORT", 8010))
     uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)

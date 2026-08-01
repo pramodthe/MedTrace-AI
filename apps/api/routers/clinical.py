@@ -74,11 +74,11 @@ def _month_label(value: Any) -> str:
 def _timeline(zep_user_id: str) -> list[TimelineEvent]:
     if not zep_user_id:
         return []
-    df = list_recent_episodes(zep_user_id, lastn=40, truncate_chars=240)
-    if df.empty:
+    rows = list_recent_episodes(zep_user_id, lastn=40, truncate_chars=240)
+    if not rows:
         return []
     grouped: dict[str, list[str]] = defaultdict(list)
-    for _, row in df.iterrows():
+    for row in rows:
         date_label = _month_label(row.get("created_at"))
         text = str(row.get("content") or "").strip()
         if not text:
@@ -104,13 +104,13 @@ def _timeline(zep_user_id: str) -> list[TimelineEvent]:
 def _conditions(zep_user_id: str) -> list[ConditionOut]:
     if not zep_user_id:
         return []
-    df = search_ontology_nodes(
+    rows = search_ontology_nodes(
         zep_user_id, "active conditions diagnoses", node_labels=["Condition"], limit=15
     )
-    if df.empty:
+    if not rows:
         return []
     out: list[ConditionOut] = []
-    for _, row in df.iterrows():
+    for row in rows:
         name = str(row.get("node_name") or "").strip()
         if not name:
             continue
@@ -128,13 +128,13 @@ def _conditions(zep_user_id: str) -> list[ConditionOut]:
 def _medications(zep_user_id: str) -> list[MedicationOut]:
     if not zep_user_id:
         return []
-    df = search_ontology_nodes(
+    rows = search_ontology_nodes(
         zep_user_id, "current medications prescriptions", node_labels=["Medication"], limit=15
     )
-    if df.empty:
+    if not rows:
         return []
     out: list[MedicationOut] = []
-    for _, row in df.iterrows():
+    for row in rows:
         name = str(row.get("node_name") or "").strip()
         if not name:
             continue
@@ -160,13 +160,13 @@ def _medications(zep_user_id: str) -> list[MedicationOut]:
 def _allergies(zep_user_id: str) -> list[AllergyOut]:
     if not zep_user_id:
         return []
-    df = search_ontology_nodes(
+    rows = search_ontology_nodes(
         zep_user_id, "allergies adverse reactions", node_labels=["Allergy"], limit=10
     )
-    if df.empty:
+    if not rows:
         return []
     out: list[AllergyOut] = []
-    for _, row in df.iterrows():
+    for row in rows:
         name = str(row.get("node_name") or "").strip()
         if not name:
             continue
@@ -192,12 +192,12 @@ def _recent_abnormal(zep_user_id: str) -> list[AbnormalFindingOut]:
     """
     if not zep_user_id:
         return []
-    df = list_recent_episodes(zep_user_id, lastn=25, truncate_chars=None)
-    if df.empty:
+    rows = list_recent_episodes(zep_user_id, lastn=25, truncate_chars=None)
+    if not rows:
         return []
-    df = df.sort_values("created_at", ascending=False, na_position="last")
+    rows = sorted(rows, key=lambda r: str(r.get("created_at") or ""), reverse=True)
     by_test: dict[str, AbnormalFindingOut] = {}
-    for _, row in df.iterrows():
+    for row in rows:
         text = str(row.get("content") or "")
         episode_label = f"Episode {_short_date(row.get('created_at'))}"
         for pat in _LAB_HINT_PATTERNS:
@@ -223,16 +223,16 @@ def _recent_abnormal(zep_user_id: str) -> list[AbnormalFindingOut]:
 def _alerts(zep_user_id: str) -> list[AlertOut]:
     if not zep_user_id:
         return []
-    df = search_ontology_edges(
+    rows = search_ontology_edges(
         zep_user_id,
         "risk allergy abnormal trend",
         edge_types=["HAS_ALLERGY", "HAS_CONDITION", "HAS_OBSERVATION"],
         limit=10,
     )
-    if df.empty:
+    if not rows:
         return []
     out: list[AlertOut] = []
-    for _, row in df.iterrows():
+    for row in rows:
         fact = str(row.get("fact") or "").strip()
         if not fact:
             continue
@@ -261,12 +261,12 @@ def _labs(zep_user_id: str) -> list[LabTrendOut]:
     """Aggregate the two most-recent values per lab test from recent episodes."""
     if not zep_user_id:
         return []
-    df = list_recent_episodes(zep_user_id, lastn=40, truncate_chars=None)
-    if df.empty:
+    rows = list_recent_episodes(zep_user_id, lastn=40, truncate_chars=None)
+    if not rows:
         return []
-    df = df.sort_values("created_at", ascending=False, na_position="last")
+    rows = sorted(rows, key=lambda r: str(r.get("created_at") or ""), reverse=True)
     series: dict[str, list[tuple[str, str]]] = defaultdict(list)
-    for _, row in df.iterrows():
+    for row in rows:
         text = str(row.get("content") or "")
         date_label = _month_label(row.get("created_at"))
         for pat in _LAB_HINT_PATTERNS:

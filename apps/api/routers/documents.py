@@ -71,7 +71,16 @@ async def upload_document(
     file: UploadFile = File(...),
     document_kind: DocumentKind = Form("clinical_pdf"),
     extract_mode: str = Form("vlm_png"),
+    dpi: int | None = Form(None),
+    max_pages: int | None = Form(None),
 ) -> IngestResult:
+    """Ingest one document into the patient's Zep graph and the document registry.
+
+    ``extract_mode="pypdf"`` reads the PDF text layer only (cheap, misses scans); anything
+    else renders each page to PNG and calls the VLM. ``dpi`` and ``max_pages`` tune that
+    vision path and fall back to ``PDF_VL_DPI`` / ``PDF_VL_MAX_PAGES`` when unset — one
+    multimodal call is billed per page, so cap large PDFs.
+    """
     chart = get_chart_subject(chart_subject_id=chart_subject_id)
     if not chart:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Patient not found.")
@@ -93,7 +102,7 @@ async def upload_document(
     if document_kind == "clinical_pdf":
         use_vlm = extract_mode != "pypdf"
         try:
-            text = pdf_bytes_to_text(raw, use_vlm=use_vlm)
+            text = pdf_bytes_to_text(raw, use_vlm=use_vlm, dpi=dpi, max_pages=max_pages)
         except Exception as exc:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

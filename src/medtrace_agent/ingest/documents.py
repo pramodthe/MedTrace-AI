@@ -143,6 +143,69 @@ def chunk_for_zep(
     return chunks
 
 
+def _episode_uuid(episode: Any) -> str | None:
+    """Zep SDK versions expose the episode id as ``uuid_`` or ``uuid``."""
+    uid = getattr(episode, "uuid_", None) or getattr(episode, "uuid", None)
+    return str(uid) if uid else None
+
+
+def _ingest_text_to_patient_graph(
+    user_id: str,
+    text: str,
+    *,
+    tag: str,
+    kind: str,
+    filename: str,
+    doc_id: str | None = None,
+    extra_metadata: dict[str, Any] | None = None,
+) -> list[str]:
+    """Chunk ``text`` and add each chunk to the patient's Zep graph as a text episode.
+
+    ``tag`` prefixes the per-chunk header and source description; ``kind`` lands in episode
+    metadata. Both exist so PDF episodes stay distinguishable from note episodes in the graph.
+
+    Returns episode UUIDs from the graph.add responses where available.
+    """
+    chunks = chunk_for_zep(text)
+    if not chunks:
+        return []
+
+    client = get_zep_client()
+    did = doc_id or uuid.uuid4().hex
+    uploaded_at = datetime.now(timezone.utc).isoformat()
+    total = len(chunks)
+    episode_ids: list[str] = []
+
+    for i, chunk in enumerate(chunks):
+        header = (
+            f"[{tag} doc_id={did} filename={filename} "
+            f"| chunk {i + 1}/{total} | ingested_at:{uploaded_at}]\n"
+        )
+        meta: dict[str, Any] = {
+            "kind": kind,
+            "doc_id": did,
+            "filename": filename,
+            "chunk_index": i,
+            "chunk_total": total,
+            "uploaded_at": uploaded_at,
+        }
+        if extra_metadata:
+            meta.update(extra_metadata)
+
+        ep = client.graph.add(
+            user_id=user_id,
+            type="text",
+            data=header + chunk,
+            metadata=meta,
+            source_description=f"{tag} chunk {i + 1}/{total} doc_id={did} ({filename})",
+        )
+        uid = _episode_uuid(ep)
+        if uid:
+            episode_ids.append(uid)
+
+    return episode_ids
+
+
 def ingest_pdf_text_to_patient_graph(
     user_id: str,
     text: str,
@@ -154,51 +217,16 @@ def ingest_pdf_text_to_patient_graph(
     """
     Ingest plain text (already extracted from PDF) into the patient's Zep user graph.
     Each upload should pass a stable ``doc_id`` (or one is generated) for traceability in chat.
-
-    Returns episode UUIDs from graph.add responses when available.
     """
-    client = get_zep_client()
-    chunks = chunk_for_zep(text)
-    if not chunks:
-        return []
-
-    fname = filename or "unknown.pdf"
-    did = doc_id or uuid.uuid4().hex
-    uploaded_at = datetime.now(timezone.utc).isoformat()
-    episode_ids: list[str] = []
-
-    total = len(chunks)
-    for i, chunk in enumerate(chunks):
-        header = (
-            f"[ClinicalDocument doc_id={did} filename={fname} "
-            f"| chunk {i + 1}/{total} | ingested_at:{uploaded_at}]\n"
-        )
-        payload = header + chunk
-        meta: dict[str, Any] = {
-            "kind": "pdf_medical_history",
-            "doc_id": did,
-            "filename": fname,
-            "chunk_index": i,
-            "chunk_total": total,
-            "uploaded_at": uploaded_at,
-        }
-        if extra_metadata:
-            meta.update(extra_metadata)
-
-        ep = client.graph.add(
-            user_id=user_id,
-            type="text",
-            data=payload,
-            metadata=meta,
-            source_description=(
-                f"PDF chunk {i + 1}/{total} doc_id={did} ({fname})"
-            ),
-        )
-        uid = getattr(ep, "uuid_", None) or getattr(ep, "uuid", None)
-        if uid:
-            episode_ids.append(str(uid))
-
-    return episode_ids
+    return _ingest_text_to_patient_graph(
+        user_id,
+        text,
+        tag="ClinicalDocument",
+        kind="pdf_medical_history",
+        filename=filename or "unknown.pdf",
+        doc_id=doc_id,
+        extra_metadata=extra_metadata,
+    )
 
 
 def ingest_plain_text_note_to_patient_graph(
@@ -212,54 +240,16 @@ def ingest_plain_text_note_to_patient_graph(
 ) -> list[str]:
     """
     Ingest plain text clinical notes (radiology or session) via ``chunk_for_zep`` then ``graph.add``.
-
-    Uses distinct headers/metadata ``kind`` so Zep episodes are distinguishable from PDF ingest.
     """
-    client = get_zep_client()
-    chunks = chunk_for_zep(text)
-    if not chunks:
-        return []
-
-    fname = filename or "note.txt"
-    did = doc_id or uuid.uuid4().hex
-    uploaded_at = datetime.now(timezone.utc).isoformat()
-    episode_ids: list[str] = []
-
-    tag = "RadiologyNote" if note_source == "radiology_note" else "SessionNote"
-    kind = note_source
-
-    total = len(chunks)
-    for i, chunk in enumerate(chunks):
-        header = (
-            f"[{tag} doc_id={did} filename={fname} "
-            f"| chunk {i + 1}/{total} | ingested_at:{uploaded_at}]\n"
-        )
-        payload = header + chunk
-        meta: dict[str, Any] = {
-            "kind": kind,
-            "doc_id": did,
-            "filename": fname,
-            "chunk_index": i,
-            "chunk_total": total,
-            "uploaded_at": uploaded_at,
-        }
-        if extra_metadata:
-            meta.update(extra_metadata)
-
-        ep = client.graph.add(
-            user_id=user_id,
-            type="text",
-            data=payload,
-            metadata=meta,
-            source_description=(
-                f"{tag} chunk {i + 1}/{total} doc_id={did} ({fname})"
-            ),
-        )
-        uid = getattr(ep, "uuid_", None) or getattr(ep, "uuid", None)
-        if uid:
-            episode_ids.append(str(uid))
-
-    return episode_ids
+    return _ingest_text_to_patient_graph(
+        user_id,
+        text,
+        tag="RadiologyNote" if note_source == "radiology_note" else "SessionNote",
+        kind=note_source,
+        filename=filename or "note.txt",
+        doc_id=doc_id,
+        extra_metadata=extra_metadata,
+    )
 
 
 def ingest_txt_path_to_patient_graph(

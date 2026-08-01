@@ -2,8 +2,8 @@
 Optional InsForge persistence: Storage uploads + documents / chart_subjects / chat_sessions rows.
 
 Uses InsForge HTTP API (same routes as @insforge/sdk): ``/api/database/records/{table}``,
-``/api/storage/buckets/{bucket}/objects``. Requires server-side ``INSFORGE_API_KEY`` for
-Streamlit (do not expose in client apps).
+``/api/storage/buckets/{bucket}/objects``. Requires the server-side ``INSFORGE_API_KEY``
+(do not expose it in client apps).
 
 Environment:
   INSFORGE_URL           — e.g. https://{appkey}.us-east.insforge.app
@@ -11,24 +11,55 @@ Environment:
   INSFORGE_ANON_KEY      — optional; sent as apikey header when set
   INSFORGE_PROFILE_ID    — uuid matching public.profiles.id / auth.users.id
   INSFORGE_DOCUMENTS_BUCKET — default medtrace-documents
+  MEDTRACE_LOCAL_MOCK    — set to 1/true to use file-backed local fixtures
+                           instead of InsForge (see ``local_store``)
 """
 
 from __future__ import annotations
 
+import functools
 import mimetypes
 import os
-from typing import Any, Literal
+from collections.abc import Callable
+from typing import Any, Literal, TypeVar
 
 import httpx
 
+from medtrace_agent import local_store
+from medtrace_agent.local_store import local_mock_enabled, local_profile_id
+
 DocumentKind = Literal["clinical_pdf", "radiology_note", "conversation_note"]
 
+_F = TypeVar("_F", bound=Callable[..., Any])
 
-def insforge_persistence_enabled() -> bool:
+
+def local_mock_fallback(fn: _F) -> _F:
+    """Route the call to the same-named ``local_store`` function when local mock is on.
+
+    Every persistence helper here has a signature-matching twin in ``local_store``; this
+    keeps the two in lockstep instead of repeating the branch in each function. Decorated
+    functions are keyword-only, so the arguments forward verbatim.
+    """
+
+    @functools.wraps(fn)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        if local_mock_enabled():
+            return getattr(local_store, fn.__name__)(*args, **kwargs)
+        return fn(*args, **kwargs)
+
+    return wrapper  # type: ignore[return-value]
+
+
+def _remote_insforge_configured() -> bool:
     url = (os.environ.get("INSFORGE_URL") or "").strip()
     key = (os.environ.get("INSFORGE_API_KEY") or "").strip()
     profile = (os.environ.get("INSFORGE_PROFILE_ID") or "").strip()
     return bool(url and key and profile)
+
+
+def insforge_persistence_enabled() -> bool:
+    """True when either real InsForge creds are set or local mock mode is on."""
+    return local_mock_enabled() or _remote_insforge_configured()
 
 
 def _base_url() -> str:
@@ -44,6 +75,8 @@ def _anon_key() -> str:
 
 
 def _profile_id() -> str:
+    if local_mock_enabled():
+        return local_profile_id()
     return (os.environ.get("INSFORGE_PROFILE_ID") or "").strip()
 
 
@@ -64,6 +97,7 @@ def _records(table: str) -> str:
     return f"{_base_url()}/api/database/records/{table}"
 
 
+@local_mock_fallback
 def upload_bytes_to_bucket(
     file_bytes: bytes,
     filename: str,
@@ -83,6 +117,7 @@ def upload_bytes_to_bucket(
         return r.json()
 
 
+@local_mock_fallback
 def ensure_chart_subject_id(
     *,
     zep_user_id: str,
@@ -140,6 +175,7 @@ def ensure_chart_subject_id(
     return None
 
 
+@local_mock_fallback
 def upsert_chat_session_row(
     *,
     zep_thread_id: str,
@@ -175,6 +211,7 @@ def upsert_chat_session_row(
         ins.raise_for_status()
 
 
+@local_mock_fallback
 def insert_document_record(
     *,
     doc_id: str,
@@ -216,6 +253,7 @@ def insert_document_record(
     return None
 
 
+@local_mock_fallback
 def list_chart_subjects(
     *,
     profile_id: str | None = None,
@@ -239,6 +277,7 @@ def list_chart_subjects(
         return data if isinstance(data, list) else []
 
 
+@local_mock_fallback
 def get_chart_subject(
     *,
     chart_subject_id: str,
@@ -262,6 +301,7 @@ def get_chart_subject(
     return None
 
 
+@local_mock_fallback
 def update_chart_subject_metadata(
     *,
     chart_subject_id: str,
@@ -290,6 +330,7 @@ def update_chart_subject_metadata(
     return None
 
 
+@local_mock_fallback
 def list_chat_sessions_for_chart(
     *,
     chart_subject_id: str,
@@ -311,6 +352,30 @@ def list_chat_sessions_for_chart(
         return data if isinstance(data, list) else []
 
 
+@local_mock_fallback
+def find_chat_session_by_thread(
+    *,
+    zep_thread_id: str,
+) -> dict[str, Any] | None:
+    """Return the chat_sessions row for a Zep thread, or None."""
+    if not insforge_persistence_enabled():
+        return None
+    params = {
+        "zep_thread_id": f"eq.{zep_thread_id}",
+        "profile_id": f"eq.{_profile_id()}",
+        "select": "*",
+        "limit": "1",
+    }
+    with httpx.Client(timeout=30.0) as client:
+        r = client.get(_records("chat_sessions"), headers=_headers(), params=params)
+        r.raise_for_status()
+        rows = r.json()
+        if isinstance(rows, list) and rows and isinstance(rows[0], dict):
+            return rows[0]
+    return None
+
+
+@local_mock_fallback
 def touch_chat_session(
     *,
     zep_thread_id: str,
@@ -329,6 +394,7 @@ def touch_chat_session(
         )
 
 
+@local_mock_fallback
 def fetch_documents_registry(
     *,
     chart_subject_id: str | None = None,
@@ -352,7 +418,7 @@ def fetch_documents_registry(
 
 
 def document_row_to_ingested_doc(row: dict[str, Any]) -> dict[str, Any]:
-    """Map DB row to Streamlit ``ingested_docs`` element shape."""
+    """Map a DB row to the compact ``ingested_docs`` catalog shape used in LLM prompts."""
     kind = row.get("document_kind") or ""
     uploaded = row.get("uploaded_at") or ""
     if isinstance(uploaded, str):

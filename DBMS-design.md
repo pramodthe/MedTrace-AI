@@ -225,6 +225,8 @@ After upload, **InsForge Storage** holds the file; extraction/chunking and **`gr
 4. Seed a `profiles` row for your app user (or sign up in the hosted app) so `INSFORGE_PROFILE_ID` matches `auth.users.id`.
 5. Add **RLS** when exposing multi-user access (`profile_id` / `owner_profile_id` ↔ `auth.uid()`).
 
-## Streamlit persistence (optional)
+## Persistence modes
 
-When `INSFORGE_URL`, `INSFORGE_API_KEY`, and `INSFORGE_PROFILE_ID` are set in `.env` / `.env.local`, the app uploads files to the InsForge bucket and records rows in `documents`, and syncs `chart_subjects` + `chat_sessions`. See `.env.example` and `medtrace_agent.insforge_api`.
+When `INSFORGE_URL`, `INSFORGE_API_KEY`, and `INSFORGE_PROFILE_ID` are set in `.env` / `.env.local`, the API uploads files to the InsForge bucket and records rows in `documents`, and syncs `chart_subjects` + `chat_sessions`. See `.env.example` and `medtrace_agent.insforge_api`.
+
+Setting `MEDTRACE_LOCAL_MOCK=1` instead swaps every one of those calls for a file-backed store under `data/local_mock/` (`medtrace_agent.local_store`), so the dashboard runs with no InsForge project. The tables below still describe the shape of the data in that mode.

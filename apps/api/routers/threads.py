@@ -21,6 +21,7 @@ from apps.api.schemas import (
 from medtrace_agent.fireworks_config import fireworks_chat_model
 from medtrace_agent.insforge_api import (
     fetch_documents_registry,
+    find_chat_session_by_thread,
     get_chart_subject,
     list_chat_sessions_for_chart,
     touch_chat_session,
@@ -29,6 +30,7 @@ from medtrace_agent.insforge_api import (
 from medtrace_agent.zep.memory import (
     append_turn,
     ensure_session,
+    ensure_user,
     fetch_thread_context,
     get_zep_client,
 )
@@ -53,7 +55,7 @@ def _row_to_thread(row: dict[str, Any]) -> ChatThreadOut:
 
 
 def _format_document_catalog(docs: list[dict[str, Any]]) -> str:
-    """Bulleted catalog for the LLM (matches the Streamlit format)."""
+    """Bulleted document catalog injected into the chat system prompt."""
     if not docs:
         return ""
     lines: list[str] = []
@@ -95,6 +97,9 @@ def create_thread(chart_subject_id: str, body: CreateThreadIn) -> ChatThreadOut:
             detail="chart_subject is missing zep_user_id.",
         )
     zep_thread_id = f"react-{chart_subject_id[:8]}-{uuid.uuid4().hex[:10]}"
+    # Charts seeded straight into the store (local mock, SQL seeds) have no Zep user yet,
+    # and thread.create 404s without one. ensure_user is idempotent.
+    ensure_user(zep_user_id, str(chart.get("display_name") or zep_user_id))
     ensure_session(zep_thread_id, zep_user_id)
     upsert_chat_session_row(
         zep_thread_id=zep_thread_id,
@@ -207,32 +212,10 @@ def _resolve_chart_for_thread(zep_thread_id: str) -> tuple[str | None, dict[str,
     Returns (chart_subject_id, chart_row). If no chat_sessions row exists, falls
     back to ``{}`` and lets downstream code handle missing display_name.
     """
-    import httpx
-
-    from medtrace_agent.insforge_api import _api_key, _anon_key, _base_url, _profile_id
-
-    base = _base_url()
-    pid = _profile_id()
-    headers = {
-        "Authorization": f"Bearer {_api_key()}",
-        "apikey": _anon_key() or _api_key(),
-    }
-    params = {
-        "zep_thread_id": f"eq.{zep_thread_id}",
-        "profile_id": f"eq.{pid}",
-        "select": "chart_subject_id",
-        "limit": "1",
-    }
-    chart_subject_id: str | None = None
-    with httpx.Client(timeout=15.0) as client:
-        r = client.get(f"{base}/api/database/records/chat_sessions", headers=headers, params=params)
-        r.raise_for_status()
-        rows = r.json()
-        if isinstance(rows, list) and rows and isinstance(rows[0], dict):
-            cid = rows[0].get("chart_subject_id")
-            if cid:
-                chart_subject_id = str(cid)
-    if not chart_subject_id:
+    session = find_chat_session_by_thread(zep_thread_id=zep_thread_id) or {}
+    cid = session.get("chart_subject_id")
+    if not cid:
         return None, {}
+    chart_subject_id = str(cid)
     chart = get_chart_subject(chart_subject_id=chart_subject_id) or {}
     return chart_subject_id, chart

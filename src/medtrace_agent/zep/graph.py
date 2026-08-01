@@ -1,10 +1,14 @@
-"""Read-only Zep graph helpers for the Streamlit inspector (episodes + temporal edges)."""
+"""Read-only Zep graph helpers (episodes, temporal edges, ontology search).
+
+Every function returns ``list[dict]`` — plain rows the FastAPI routers validate into
+Pydantic models and the deep-agent tools serialise to CSV.
+"""
 
 from __future__ import annotations
 
+import csv
+import io
 from typing import Any
-
-import pandas as pd
 
 from zep_cloud.types.search_filters import SearchFilters
 
@@ -24,10 +28,10 @@ def list_recent_episodes(
     lastn: int = 25,
     *,
     truncate_chars: int | None = 200,
-) -> pd.DataFrame:
-    """Return recent Zep episodes as a DataFrame.
+) -> list[dict[str, Any]]:
+    """Return recent Zep episodes as plain row dicts.
 
-    Streamlit's inspector wants short snippets (default ``truncate_chars=200``);
+    The deep-agent tool wants short snippets (default ``truncate_chars=200``);
     the FastAPI clinical router needs full content to run lab regex extraction
     and passes ``truncate_chars=None`` to disable truncation.
     """
@@ -53,14 +57,14 @@ def list_recent_episodes(
                 "content": content,
             }
         )
-    return pd.DataFrame(rows)
+    return rows
 
 
 def list_fact_edges(
     user_id: str, limit: int = 50, uuid_cursor: str | None = None
-) -> tuple[pd.DataFrame, str | None]:
+) -> tuple[list[dict[str, Any]], str | None]:
     """
-    Returns a dataframe of temporal facts and an optional cursor for the next page
+    Returns temporal fact rows and an optional cursor for the next page
     (last edge uuid when the page is full).
     """
     client = get_zep_client()
@@ -92,7 +96,7 @@ def list_fact_edges(
     if edges and len(edges) >= limit:
         next_cursor = _edge_uuid(edges[-1])
 
-    return pd.DataFrame(rows), next_cursor
+    return rows, next_cursor
 
 
 def search_ontology_nodes(
@@ -101,10 +105,10 @@ def search_ontology_nodes(
     node_labels: list[str],
     *,
     limit: int = 15,
-) -> pd.DataFrame:
+) -> list[dict[str, Any]]:
     """Filtered graph search scoped to custom entity labels (ontology highlights)."""
     if not node_labels:
-        return pd.DataFrame()
+        return []
     client = get_zep_client()
     filters = SearchFilters(node_labels=node_labels)
     q = (query or "").strip() or "patient clinical record"
@@ -127,7 +131,7 @@ def search_ontology_nodes(
                 "summary": summ[:500],
             }
         )
-    return pd.DataFrame(rows)
+    return rows
 
 
 def search_ontology_edges(
@@ -136,10 +140,10 @@ def search_ontology_edges(
     edge_types: list[str],
     *,
     limit: int = 15,
-) -> pd.DataFrame:
+) -> list[dict[str, Any]]:
     """Filtered graph search scoped to custom edge types."""
     if not edge_types:
-        return pd.DataFrame()
+        return []
     client = get_zep_client()
     filters = SearchFilters(edge_types=edge_types)
     q = (query or "").strip() or "patient clinical record"
@@ -161,4 +165,17 @@ def search_ontology_edges(
                 "invalid_at": edge.invalid_at,
             }
         )
-    return pd.DataFrame(rows)
+    return rows
+
+
+def rows_to_csv(rows: list[dict[str, Any]], *, max_rows: int | None = None) -> str:
+    """Serialise rows to CSV for LLM tool output. Empty rows produce an empty string."""
+    if not rows:
+        return ""
+    if max_rows is not None:
+        rows = rows[:max_rows]
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=list(rows[0].keys()))
+    writer.writeheader()
+    writer.writerows(rows)
+    return buf.getvalue()

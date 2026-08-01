@@ -1,5 +1,5 @@
 """
-Structured patient definition for the Streamlit demo — parsed from JSON.
+Structured patient definition for demo fixtures and seeding — parsed from JSON.
 
 This is **not** a clinical record or FHIR resource; it only drives Zep ``user_id``,
 display name, and optional demo metadata persisted on ``chart_subjects.metadata``.
@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class PatientDemographics(BaseModel):
@@ -82,18 +82,13 @@ class PatientJson(BaseModel):
     )
 
 
-def patient_json_schema() -> dict[str, Any]:
-    """JSON Schema for ``PatientJson`` (for docs / Streamlit)."""
-    return PatientJson.model_json_schema()
-
-
 def default_patient_example() -> dict[str, Any]:
     """Example object matching :class:`PatientJson` for prefilling the UI."""
     return {
         "zep_user_id": "demo-patient-synthetic-001",
         "display_name": "Alex Demo",
         "notes": "Synthetic demo patient — not a real individual.",
-        "tags": ["synthetic", "streamlit-demo"],
+        "tags": ["synthetic", "demo"],
         "cohort": "internal-demo",
         "scenario": "Chronic-care dialogue smoke test",
         "demographics": {"age_band": "50-59", "locale": "en-US"},
@@ -117,9 +112,28 @@ def patient_metadata_blob(record: PatientJson) -> dict[str, Any]:
     return d
 
 
-def format_validation_error(err: ValidationError) -> str:
-    lines = []
-    for e in err.errors():
-        loc = ".".join(str(x) for x in e.get("loc", ()))
-        lines.append(f"- `{loc}`: {e.get('msg', '')}")
-    return "\n".join(lines) if lines else str(err)
+# ---- Demo-fixture derivations (shared by local_store seeding and scripts/) ----
+
+
+def derive_age(age_band: str | None, *, default: int = 45) -> int:
+    """Midpoint of an ``age_band`` like ``"50-59"`` / ``"80plus"``; ``default`` if unparseable."""
+    if not age_band:
+        return default
+    parts = age_band.replace("plus", "").replace("+", "").split("-")
+    try:
+        nums = [int(p.strip()) for p in parts if p.strip().isdigit()]
+    except ValueError:
+        return default
+    return sum(nums) // len(nums) if nums else default
+
+
+def derive_primary_doctor(record: dict[str, Any]) -> str:
+    """Pick a plausible demo clinician from the fixture's ``scenario`` text."""
+    scenario = str(record.get("scenario") or "").lower()
+    if "radiology" in scenario:
+        return "Dr. Patel (Radiology)"
+    if "cardio" in scenario or "heart" in scenario:
+        return "Dr. Lin (Cardiology)"
+    if "endocrin" in scenario or "diabetes" in scenario or "medication" in scenario:
+        return "Dr. Morales (Endocrinology)"
+    return "Dr. Smith (Primary care)"

@@ -20,6 +20,25 @@ _logger = logging.getLogger(__name__)
 _initialized = False
 
 
+def disable_langsmith_without_key() -> None:
+    """Turn tracing off when ``LANGSMITH_TRACING`` is on but no key is configured.
+
+    LangChain reads these flags at import time and then retries an authenticated ingest
+    after *every* LLM call, so a blank key turns each turn into a stream of 401s in the
+    logs. Called by ``init_langtrace`` before any LangChain module is imported.
+    """
+    tracing_on = (
+        os.environ.get("LANGSMITH_TRACING") or os.environ.get("LANGCHAIN_TRACING_V2") or ""
+    ).strip().lower() in ("true", "1", "yes")
+    has_key = bool(
+        (os.environ.get("LANGSMITH_API_KEY") or os.environ.get("LANGCHAIN_API_KEY") or "").strip()
+    )
+    if tracing_on and not has_key:
+        os.environ["LANGSMITH_TRACING"] = "false"
+        os.environ["LANGCHAIN_TRACING_V2"] = "false"
+        _logger.info("LangSmith tracing requested without an API key — disabled to avoid 401 spam.")
+
+
 def init_langtrace() -> bool:
     """
     Initialize Langtrace when ``LANGTRACE_API_KEY`` is set.
@@ -28,6 +47,7 @@ def init_langtrace() -> bool:
     Safe to call multiple times (idempotent).
     """
     global _initialized
+    disable_langsmith_without_key()
     if _initialized:
         return True
 

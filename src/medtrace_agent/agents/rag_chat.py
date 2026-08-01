@@ -1,4 +1,4 @@
-"""LangChain ChatOpenAI wrapper with Zep memory context in the system prompt."""
+"""Fast chat path: one LLM call with Zep memory context in the system prompt."""
 
 from __future__ import annotations
 
@@ -6,14 +6,9 @@ import os
 from typing import Sequence
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
 from zep_cloud.types import Message as ZepMessage
 
-from medtrace_agent.fireworks_config import (
-    fireworks_api_key,
-    fireworks_base_url,
-    fireworks_reasoning_effort,
-)
+from medtrace_agent.fireworks_config import fireworks_chat_client
 
 
 BASE_SYSTEM = """You are a concise, friendly assistant in a demo app backed by Zep long-term memory.
@@ -69,14 +64,11 @@ def chat_with_memory(
         system_parts.append("\n")
         system_parts.append(DOC_CATALOG_INSTRUCTIONS)
 
-    key = api_key or fireworks_api_key()
-
-    llm = ChatOpenAI(
-        model=model_name,
+    llm = fireworks_chat_client(
+        model_name,
         temperature=temperature,
-        api_key=key,
-        base_url=(base_url or fireworks_base_url()),
-        reasoning_effort=fireworks_reasoning_effort(),
+        api_key=api_key,
+        base_url=base_url,
     )
     lc_messages: list[BaseMessage] = [SystemMessage(content="".join(system_parts))]
     lc_messages.extend(_zep_to_lc(thread_messages))

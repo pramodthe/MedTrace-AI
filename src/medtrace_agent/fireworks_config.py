@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import os
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from langchain_openai import ChatOpenAI
 
 DEFAULT_FIREWORKS_BASE_URL = "https://api.fireworks.ai/inference/v1/"
-# Serverless text model — entitlement varies by API key; Llama 3.3 70B is commonly enabled when DeepSeek ids are not.
-DEFAULT_FIREWORKS_MODEL = "accounts/fireworks/models/llama-v3p3-70b-instruct"
-# Multimodal default for PDF page ingest (must accept images). Not every account has Qwen3.6 Plus.
-DEFAULT_FIREWORKS_VL_MODEL = "accounts/fireworks/models/kimi-k2p5"
+# Fireworks retires serverless model ids fairly often, and entitlement varies by key — a stale
+# id fails as `404 Model not found, inaccessible, and/or not deployed`, not as an auth error.
+# `scripts/fireworks_probe_models.py` lists what your key can actually reach.
+DEFAULT_FIREWORKS_MODEL = "accounts/fireworks/models/kimi-k2p6"
+# Multimodal default for PDF page ingest (must accept image_url content blocks).
+DEFAULT_FIREWORKS_VL_MODEL = "accounts/fireworks/models/kimi-k2p6"
 
 
 def _env_model(var: str) -> str:
@@ -64,3 +70,29 @@ def fireworks_reasoning_effort() -> str:
     """
     v = (os.environ.get("FIREWORKS_REASONING_EFFORT") or "none").strip().lower()
     return v if v else "none"
+
+
+def fireworks_chat_client(
+    model: str | None = None,
+    *,
+    temperature: float = 0.2,
+    api_key: str | None = None,
+    base_url: str | None = None,
+    **kwargs: Any,
+) -> ChatOpenAI:
+    """Build a ``ChatOpenAI`` bound to the configured OpenAI-compatible endpoint.
+
+    Single construction point for every LLM call in the package (fast chat, deep agent,
+    PDF vision). Callers vary only ``model``, ``temperature`` and occasional extras like
+    ``max_tokens``; base URL, key and reasoning effort always come from the environment.
+    """
+    from langchain_openai import ChatOpenAI
+
+    return ChatOpenAI(
+        model=model or fireworks_chat_model(),
+        temperature=temperature,
+        api_key=api_key or fireworks_api_key(),
+        base_url=base_url or fireworks_base_url(),
+        reasoning_effort=fireworks_reasoning_effort(),
+        **kwargs,
+    )

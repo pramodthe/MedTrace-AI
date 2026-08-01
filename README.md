@@ -4,40 +4,37 @@
 
 ## Monorepo layout & running everything
 
-This repository is a single monorepo with two product stacks that share the
-`src/medtrace_agent/` Python package:
+One FastAPI service and one React app, sharing the `src/medtrace_agent/` Python package:
 
-- **Medtrace clinical stack** (this README): `apps/streamlit_app.py`, `apps/api/` (FastAPI),
-  `apps/medtrace-web/` (React). Patient dashboard, clinical memory, note-taking.
-- **Radiology imaging stack** (see `CLAUDE.md`): `services/radiology-api/` (FastAPI) +
-  `apps/radiology-web/` (React). DICOM upload, MedSAM2 segmentation, draft reports.
+- **`apps/api/`** (port 8001) — clinical routes (patients, documents, chat threads, derived
+  clinical views over Zep) **and** imaging routes (DICOM upload, MedSAM2 segmentation, draft
+  reports). Imaging works with no secrets at all; clinical needs keys or local-mock mode.
+- **`apps/web/`** (port 3000) — one app, three routes: `/` + `/patients/:id` (dashboard),
+  `/imaging` (DICOM viewer), `/session` (voice consultation).
 
-Other folders: `services/medsamlite/` (standalone segmentation demo), `services/transcription/`
-(voice/CopilotKit prototype), `migrations/`, `mock/`, `scripts/`, `tests/`.
+`services/transcription/` is a preserved prototype backing the `/session` route and starts
+separately. Other folders: `migrations/`, `mock/`, `scripts/`, `tests/`.
 
 ### One command for the whole dev environment
 
 ```bash
-# Python: shared venv used by every Python service + tests
+# Python: shared venv used by the API, the scripts and the tests
 python -m venv .venv
-.venv/bin/pip install -e ".[dev]"
-.venv/bin/pip install -r services/radiology-api/requirements.txt
+.venv/bin/pip install -e ".[dev,imaging]"
 
-# Node: root helper + both web apps
+# Node
 npm install
-npm --prefix apps/radiology-web ci
-npm --prefix apps/medtrace-web ci
+npm --prefix apps/web ci
 
-# Copy env (Medtrace stack needs ZEP/FIREWORKS/INSFORGE keys; radiology runs mock without keys)
+# Copy env. Clinical features need ZEP/FIREWORKS/INSFORGE keys; imaging runs mock without any.
+# For a fully offline dashboard, set MEDTRACE_LOCAL_MOCK=1 instead.
 cp .env.example .env
 
-# Boot ALL services on fixed, non-conflicting ports:
-npm run dev
+npm run dev          # api on 8001, web on 3000
 ```
 
-`npm run dev` starts: radiology-api (8000), radiology-web (5173), medtrace-api (8001),
-medtrace-web (3000). Scoped subsets: `npm run dev:radiology`, `npm run dev:medtrace`,
-`npm run dev:streamlit`. Python tests: `npm run test:py`.
+Other scripts: `npm run dev:api`, `npm run dev:web`, `npm run dev:transcription`,
+`npm run lint`, `npm run build`, `npm run test:py`.
 
 ## Sponsors & inference stack
 
@@ -53,7 +50,7 @@ Authentication for those endpoints is **optional** whenever your Space or gatewa
 
 #  Architecture
 
-Streamlit demo that combines **Zep Cloud** (long-term memory + temporal knowledge graph) with **`ChatOpenAI`** pointed at an **OpenAI-compatible** endpoint. The **custom** [**MedGemma 1.5 4B IT (GGUF)**](https://huggingface.co/gguf-org/medgemma-1.5-4b-it-gguf) checkpoint (`gguf-org/medgemma-1.5-4b-it-gguf` on Hugging Face) is **fine-tuned** on **AMD** GPUs; we **deploy** inference on **[Hugging Face Spaces](https://huggingface.co/docs/hub/spaces)** behind **[vLLM’s OpenAI-compatible server](https://docs.vllm.ai/en/latest/serving/openai_compatible_server/)** for both chat and multimodal PDF ingest. Details: [LLM model](#llm-model) and [Sponsors & inference stack](#sponsors--inference-stack).
+Clinical demo that combines **Zep Cloud** (long-term memory + temporal knowledge graph) with **`ChatOpenAI`** pointed at an **OpenAI-compatible** endpoint. The **custom** [**MedGemma 1.5 4B IT (GGUF)**](https://huggingface.co/gguf-org/medgemma-1.5-4b-it-gguf) checkpoint (`gguf-org/medgemma-1.5-4b-it-gguf` on Hugging Face) is **fine-tuned** on **AMD** GPUs; we **deploy** inference on **[Hugging Face Spaces](https://huggingface.co/docs/hub/spaces)** behind **[vLLM’s OpenAI-compatible server](https://docs.vllm.ai/en/latest/serving/openai_compatible_server/)** for both chat and multimodal PDF ingest. Details: [LLM model](#llm-model) and [Sponsors & inference stack](#sponsors--inference-stack).
 
 ## LLM model
 
@@ -62,14 +59,14 @@ Clinical chat and agents use **`ChatOpenAI`** against the **OpenAI-compatible** 
 - **Weights:** [gguf-org/medgemma-1.5-4b-it-gguf](https://huggingface.co/gguf-org/medgemma-1.5-4b-it-gguf) on **Hugging Face** (GGUF packaging for efficient serving).
 - **Fine-tuning:** performed using **AMD** GPU infrastructure (sponsor).
 - **Deployment:** models are served from a **[Hugging Face Space](https://huggingface.co/docs/hub/spaces)** running **[vLLM](https://docs.vllm.ai/en/latest/)** with the **[OpenAI-compatible HTTP API](https://docs.vllm.ai/en/latest/serving/openai_compatible_server/)**; point the app’s base URL and model id at that Space (or equivalent endpoint).
-- **PDF vision ingest:** each page image is sent to a **multimodal-capable** model using the same OpenAI-style **`/v1/chat/completions`** flow (see vLLM docs on multimodal serving); configure the vision base URL, model id, and API mode in **`.env.example`**. Pure text checkpoints do not replace the vision ingest path unless you use text-only extraction in the UI (**Skip VLM** matches the Streamlit control label).
+- **PDF vision ingest:** each page image is sent to a **multimodal-capable** model using the same OpenAI-style **`/v1/chat/completions`** flow (see vLLM docs on multimodal serving); configure the vision base URL, model id, and API mode in **`.env.example`**. Pure text checkpoints do not replace the vision ingest path unless you use text-only extraction in the UI (pass `extract_mode=pypdf` on the document upload route for text-only extraction).
 
 ## High-level picture
 
 ```mermaid
 flowchart LR
-  subgraph ui [Streamlit UI]
-    APP[apps/streamlit_app.py]
+  subgraph ui [Web app]
+    APP[apps/web + apps/api]
   end
   subgraph llm [LLM layer]
     AG[medtrace_agent.agents.rag_chat]
@@ -105,13 +102,13 @@ flowchart LR
 
 ## AI agent architecture
 
-How **`apps/streamlit_app.py`** chooses between the **fast RAG chat** and the **Deep Clinical Agent**, and how each connects to the configured OpenAI-compatible chat API, Zep, and PubMed.
+How the API chooses between the **fast RAG chat** and the **Deep Clinical Agent** (the `deep` flag on `POST /api/threads/{id}/messages`), and how each connects to the configured OpenAI-compatible chat API, Zep, and PubMed.
 
 ```mermaid
 flowchart TB
-  subgraph ui [Streamlit apps/streamlit_app.py]
-    toggle{Clinical reasoning Deep Agent}
-    chatIn[Chat input or sample prompts]
+  subgraph ui [apps/api threads router]
+    toggle{deep flag on the request}
+    chatIn[Chat message from the web app]
     chatIn --> toggle
     toggle -->|No| fastPath[Fast path]
     toggle -->|Yes| deepPath[Deep path]
@@ -181,7 +178,7 @@ flowchart TB
 | Piece | Role |
 |--------|------|
 | **Fast path** | Single **`chat_with_memory`** call: system prompt + Zep **`thread.get_user_context`** text (via **`fetch_thread_context`**) + recent **`thread.get`** messages + optional ingested-document catalog. **No tool loop.** |
-| **Deep path** | **`create_deep_agent`** with the same configured **`ChatOpenAI`**, custom tools for Zep graph + PubMed, **`MemorySaver`** keyed by Streamlit **`thread_id`**, plus built-in Deep Agents middleware (planning, virtual filesystem, subagents — not shown in detail). |
+| **Deep path** | **`create_deep_agent`** with the same configured **`ChatOpenAI`**, custom tools for Zep graph + PubMed, **`MemorySaver`** keyed by **`thread_id`**, plus built-in Deep Agents middleware (planning, virtual filesystem, subagents — not shown in detail). |
 | **PubMed** | **`medtrace_agent.integrations.pubmed`** — NCBI **E-utilities** (`esearch` / `esummary`) over HTTP JSON, **not** HTML scraping. |
 
 ## Repository layout
@@ -190,7 +187,8 @@ flowchart TB
 |------|---------|
 | `pyproject.toml` | Package metadata, dependencies, pytest config (`medtrace-agent`, installable from `src/`). |
 | `src/medtrace_agent/` | Importable package: `zep`, `ontology`, `integrations`, `agents`, `ingest`. |
-| `apps/streamlit_app.py` | Streamlit entrypoint (demo UI). |
+| `apps/api/` | FastAPI service: clinical + imaging routes. |
+| `apps/web/` | React app: dashboard, imaging viewer, session route. |
 | `tests/` | Pytest suite (`pip install -e ".[dev]"` includes pytest). |
 | `data/` | Sample note paths (PDFs/notes gitignored; keep `.gitkeep` where needed). |
 
@@ -199,12 +197,13 @@ flowchart TB
 
 | Module | Role |
 | ------ | ---- |
-| `apps/streamlit_app.py` | Streamlit layout: sidebar (patient, **Clinical reasoning (Deep Agent)** checkbox, PDF upload, ontology, graph controls), chat column, graph inspector. Dual chat path: **`chat_with_memory`** vs **`run_clinical_deep_agent_turn`**. |
+| `apps/api/routers/threads.py` | Chat turn: Zep context + document catalog → **`chat_with_memory`** or **`run_clinical_deep_agent_turn`** (the `deep` flag), then `append_turn`. |
+| `apps/api/routers/clinical.py` | Derives conditions, medications, labs, alerts and timeline from Zep per request — no SQL mirror. |
 | `medtrace_agent.agents.rag_chat` | `chat_with_memory(...)`: composes system prompt from base instructions, **Memory context** (`zep_context`), and **Ingested clinical documents** (`document_catalog`). Invokes `ChatOpenAI` against the configured OpenAI-compatible chat endpoint. |
-| `medtrace_agent.agents.deep_clinical` | **`create_deep_agent`** (LangChain Deep Agents): Zep tools (`get_zep_thread_context`, episodes, edges, ontology search) + **`pubmed_search_literature`**, **`MemorySaver`** checkpointing keyed by Streamlit `thread_id`. Non-diagnostic CDS framing. |
+| `medtrace_agent.agents.deep_clinical` | **`create_deep_agent`** (LangChain Deep Agents): Zep tools (`get_zep_thread_context`, episodes, edges, ontology search) + **`pubmed_search_literature`**, **`MemorySaver`** checkpointing keyed by `thread_id`. Non-diagnostic CDS framing. |
 | `medtrace_agent.integrations.pubmed` | NCBI **esearch** + **esummary** (JSON) for PubMed titles/PMIDs; uses **`NCBI_EMAIL`** / **`NCBI_API_KEY`** when set. |
 | `medtrace_agent.zep.memory` | Zep client singleton; `ensure_user`, `ensure_session` (thread create); `fetch_thread_context` (`thread.get_user_context` + `thread.get` message tail); `append_turn` (`thread.add_messages`). Handles duplicate-user / duplicate-thread `BadRequestError` shapes. |
-| `medtrace_agent.zep.graph` | Read-only inspector: episodes by user, temporal edges by user, ontology-scoped `graph.search` for nodes/edges. Returns `pandas` frames for Streamlit. |
+| `medtrace_agent.zep.graph` | Read-only inspector: episodes by user, temporal edges by user, ontology-scoped `graph.search` for nodes/edges. Returns `list[dict]` rows. |
 | `medtrace_agent.ingest.documents` | `pdf_bytes_to_text(...)` (PDF → **`ingest.scan_extract`** vision path or **`pypdf`**). **`ingest_pdf_text_to_patient_graph`**, **`ingest_plain_text_note_to_patient_graph`**, **`ingest_txt_path_to_patient_graph`** for **`data/radiology_note/`** and **`data/session_note/`** `.txt` files. All paths use **`chunk_for_zep`** then **`graph.add`**. |
 | `medtrace_agent.ingest.scan_extract` | **`pdf_to_page_images_png`**, **`vl_extract_single_page`** (LangChain `ChatOpenAI` + vision), Pydantic **`PageVLMExtract`**, **`pdf_bytes_via_vlm`** / **`serialize_pages_for_ingest`**. |
 | `medtrace_agent.ontology.clinical` | Clinical demo ontology (entity + edge type definitions). `apply_clinical_ontology` calls `graph.set_ontology` (default: project-wide registration so dashboard visibility matches Zep docs). |
@@ -227,16 +226,16 @@ Threads are **per conversation session**; changing “New thread” creates a ne
 
 - `**graph.add`** ingests PDF-derived **text** episodes tagged with metadata (`doc_id`, filename, etc.). Zep’s pipeline turns content into episodes and, over time, **temporal edges / facts** visible in the inspector.
 - `**graph.set_ontology`** registers custom entity and edge types for extraction (clinical demo schema).
-- `**graph.episode.get_by_user_id**` / `**graph.edge.get_by_user_id**` back the Streamlit “Knowledge graph inspector”.
+- `**graph.episode.get_by_user_id**` / `**graph.edge.get_by_user_id**` back the derived clinical views and the Deep Agent's graph tools.
 - `**graph.search**` powers ontology-filtered lookups in the UI.
 
 The **patient** is modeled as a Zep **user** (`zep_user_id`). All graph reads/writes for that demo patient use this id.
 
 ## Chat turn sequence
 
-1. User submits a message in Streamlit.
+1. User submits a message in the web app.
 2. `**fetch_thread_context(thread_id)`** → `zep_context` string + last N `Message` objects from Zep.
-3. `**_format_document_catalog(ingested_docs)**` builds a bullet list of PDFs registered **in this Streamlit session** (`doc_id`, filename, upload time, episode count).
+3. `**_format_document_catalog(...)**` builds a bullet list of the patient's registered documents (`doc_id`, filename, kind, episode count).
 4. **Chat path** (sidebar):
    - **Default:** `**chat_with_memory**` builds `SystemMessage` + LangChain history + new `HumanMessage`, single LLM call.
    - **Clinical reasoning (Deep Agent):** `**run_clinical_deep_agent_turn**` runs **`create_deep_agent`** with Zep + PubMed tools and LangGraph **`MemorySaver`** (same `thread_id`). Slower; includes Deep Agents planning/filesystem middleware — demo only.
@@ -326,7 +325,7 @@ Vision models can **misread numbers** or **hallucinate** structured fields. Trea
 
 ## Session state (important caveats)
 
-- `**ingested_docs`** lives only in the browser session. Reloading Streamlit clears it; Zep may still retain graph episodes from earlier runs.
+- The document catalog is read from the InsForge (or local-mock) registry per request, so it survives reloads; Zep independently retains graph episodes from earlier runs.
 - **Document catalog** injected into the LLM is derived from `**ingested_docs`**, not from a live Zep query. After a reload, citations may rely on memory alone until PDFs are re-ingested or registry persistence is added.
 
 ## Configuration
@@ -358,24 +357,23 @@ Clinical reasoning / PubMed (optional):
 ```bash
 python -m venv .venv
 source .venv/bin/activate   # or Windows equivalent
-pip install -e ".[dev]"   # editable package + pytest; or: pip install -r requirements.txt
-cp .env.example .env      # Zep required; LLM auth optional per endpoint
-streamlit run apps/streamlit_app.py
-# or (same UI): streamlit run app.py   # thin shim at repo root
+pip install -e ".[dev,imaging]"
+cp .env.example .env        # Zep + Fireworks for clinical features; imaging runs mock
+npm install && npm --prefix apps/web ci
+
+npm run dev                 # api on 8001, web on 3000
 ```
 
 Run tests:
 
 ```bash
-pytest
+pytest -m "not integration"
 ```
 
 ## Dependency stack
 
-- **streamlit** — UI and session state  
 - **zep-cloud** (v3) — `Zep` client, thread + graph APIs  
 - **langchain-openai** / **langchain-core** — `ChatOpenAI` against **[vLLM’s OpenAI-compatible API](https://docs.vllm.ai/en/latest/serving/openai_compatible_server/)** (**Hugging Face Spaces**, **AMD**)  
-- **pandas** — tables for the graph inspector  
 - **pypdf** — optional fast text-layer extraction (**Skip VLM** in UI)  
 - **pymupdf** — PDF page rasterization for vision ingest  
 - **pydantic** — validate multimodal page-extract JSON before Zep ingest  

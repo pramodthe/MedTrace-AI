@@ -15,10 +15,11 @@ venv/
 env/
 ENV/
 
-# Secrets and local env (never commit keys)
+# Secrets and local env (never commit keys). Keep *.example templates tracked.
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
+!**/.env.example
 
 # OS / editor
 .DS_Store
@@ -27,6 +28,7 @@ Thumbs.db
 .vscode/
 *.swp
 *.swo
+*.log
 
 # Jupyter / tooling
 .ipynb_checkpoints/
@@ -35,16 +37,24 @@ Thumbs.db
 .ruff_cache/
 .coverage
 htmlcov/
-
-# Streamlit (if you add secrets locally)
-.streamlit/secrets.toml
+coverage/
+.turbo/
+.cache/
 
 # Node / web build artifacts (all workspaces)
 node_modules/
 dist/
 
+# Runtime / local databases (transcription sessions, etc.)
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.sqlite-journal
+
 # Radiology API runtime uploads (DICOM studies + generated previews)
-services/radiology-api/data/
+data/studies/
+*.dcm
 
 # Local clinical notes / uploads under data/ (keep .gitkeep only)
 data/**/*.txt
@@ -52,6 +62,7 @@ data/**/*.pdf
 data/**/*.png
 data/**/*.jpg
 data/**/*.jpeg
+data/local_mock/
 
 # Cursor (optional local rules; remove line if you want to commit .cursor rules)
 .cursor/

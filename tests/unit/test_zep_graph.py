@@ -33,9 +33,9 @@ def test_list_recent_episodes_truncates_long_content(monkeypatch: pytest.MonkeyP
         episodes=[_ep(content=long_text)]
     )
     with patch("medtrace_agent.zep.graph.get_zep_client", return_value=mock_zep):
-        df = zg.list_recent_episodes("user-1", lastn=10)
-    assert len(df) == 1
-    c = str(df.iloc[0]["content"])
+        rows = zg.list_recent_episodes("user-1", lastn=10)
+    assert len(rows) == 1
+    c = str(rows[0]["content"])
     assert c.endswith("...")
     assert len(c) == 200
 
@@ -58,21 +58,21 @@ def test_list_fact_edges_returns_cursor_when_full_page(monkeypatch: pytest.Monke
     mock_zep = MagicMock()
     mock_zep.graph.edge.get_by_user_id.return_value = edges
     with patch("medtrace_agent.zep.graph.get_zep_client", return_value=mock_zep):
-        df, cursor = zg.list_fact_edges("u1", limit=3)
-    assert len(df) == 3
+        rows, cursor = zg.list_fact_edges("u1", limit=3)
+    assert len(rows) == 3
     assert cursor == "e2"
 
 
 def test_search_ontology_nodes_empty_labels(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ZEP_API_KEY", "k")
-    df = zg.search_ontology_nodes("u1", "q", [])
-    assert df.empty
+    rows = zg.search_ontology_nodes("u1", "q", [])
+    assert rows == []
 
 
 def test_search_ontology_edges_empty_types(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ZEP_API_KEY", "k")
-    df = zg.search_ontology_edges("u1", "q", [])
-    assert df.empty
+    rows = zg.search_ontology_edges("u1", "q", [])
+    assert rows == []
 
 
 def test_search_ontology_nodes_calls_graph_search(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -81,13 +81,13 @@ def test_search_ontology_nodes_calls_graph_search(monkeypatch: pytest.MonkeyPatc
     mock_zep = MagicMock()
     mock_zep.graph.search.return_value = MagicMock(nodes=[node], edges=None)
     with patch("medtrace_agent.zep.graph.get_zep_client", return_value=mock_zep):
-        df = zg.search_ontology_nodes("u1", "fever", ["Doctor"], limit=5)
+        rows = zg.search_ontology_nodes("u1", "fever", ["Doctor"], limit=5)
     mock_zep.graph.search.assert_called_once()
     kw = mock_zep.graph.search.call_args.kwargs
     assert kw["scope"] == "nodes"
     assert kw["limit"] == 5
-    assert len(df) == 1
-    assert df.iloc[0]["node_name"] == "n1"
+    assert len(rows) == 1
+    assert rows[0]["node_name"] == "n1"
 
 
 def test_episode_uuid_fallback_uuid_attr() -> None:

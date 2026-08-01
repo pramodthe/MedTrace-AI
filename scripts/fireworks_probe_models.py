@@ -6,21 +6,13 @@ from __future__ import annotations
 import json
 import os
 import sys
-from pathlib import Path
-
-_REPO = Path(__file__).resolve().parents[1]
-
 
 def main() -> None:
-    try:
-        import httpx
-        from dotenv import load_dotenv
-    except ImportError as exc:
-        print(f"Missing dependency: {exc}", file=sys.stderr)
-        sys.exit(1)
+    import httpx
 
-    load_dotenv(_REPO / ".env", override=True)
-    load_dotenv(_REPO / ".env.local", override=True)
+    from medtrace_agent.env import load_repo_env
+
+    load_repo_env()
 
     key = (os.environ.get("FIREWORKS_API_KEY") or "").strip()
     raw_base = (os.environ.get("FIREWORKS_BASE_URL") or "https://api.fireworks.ai/inference/v1/").strip()

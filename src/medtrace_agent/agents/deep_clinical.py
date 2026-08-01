@@ -13,22 +13,19 @@ from langgraph.checkpoint.memory import MemorySaver
 
 from deepagents import create_deep_agent
 
-from medtrace_agent.fireworks_config import (
-    fireworks_api_key,
-    fireworks_base_url,
-    fireworks_reasoning_effort,
-)
+from medtrace_agent.fireworks_config import fireworks_chat_client
 from medtrace_agent.integrations.pubmed import pubmed_search_summaries
 from medtrace_agent.ontology.clinical import ONTOLOGY_EDGE_TYPES, ONTOLOGY_NODE_LABELS
 from medtrace_agent.zep.graph import (
     list_fact_edges,
     list_recent_episodes,
+    rows_to_csv,
     search_ontology_edges,
     search_ontology_nodes,
 )
 from medtrace_agent.zep.memory import fetch_thread_context
 
-# Request-scoped bind for Zep tools (safe with concurrent Streamlit sessions / asyncio tasks).
+# Request-scoped bind for Zep tools (safe with concurrent requests / asyncio tasks).
 _tool_user_id: contextvars.ContextVar[str] = contextvars.ContextVar(
     "medtrace_tool_user_id", default=""
 )
@@ -83,10 +80,10 @@ def list_graph_episodes(lastn: int = 25) -> str:
     if not uid:
         return "No user_id bound."
     lastn = max(1, min(int(lastn), 80))
-    df = list_recent_episodes(uid, lastn=lastn)
-    if df.empty:
+    rows = list_recent_episodes(uid, lastn=lastn)
+    if not rows:
         return "No episodes found."
-    return df.head(60).to_csv(index=False)[:14000]
+    return rows_to_csv(rows, max_rows=60)[:14000]
 
 
 @tool
@@ -96,10 +93,10 @@ def list_temporal_edges(limit: int = 40) -> str:
     if not uid:
         return "No user_id bound."
     limit = max(1, min(int(limit), 100))
-    df, _ = list_fact_edges(uid, limit=limit)
-    if df.empty:
+    rows, _ = list_fact_edges(uid, limit=limit)
+    if not rows:
         return "No edges found."
-    return df.to_csv(index=False)[:14000]
+    return rows_to_csv(rows)[:14000]
 
 
 @tool
@@ -109,15 +106,15 @@ def search_patient_ontology_nodes(query: str) -> str:
     if not uid:
         return "No user_id bound."
     q = (query or "").strip() or "patient clinical"
-    df = search_ontology_nodes(
+    rows = search_ontology_nodes(
         uid,
         q,
         node_labels=list(ONTOLOGY_NODE_LABELS),
         limit=15,
     )
-    if df.empty:
+    if not rows:
         return "No matching ontology nodes (ontology may be unset or still processing)."
-    return df.to_csv(index=False)[:12000]
+    return rows_to_csv(rows)[:12000]
 
 
 @tool
@@ -127,15 +124,15 @@ def search_patient_ontology_edges(query: str) -> str:
     if not uid:
         return "No user_id bound."
     q = (query or "").strip() or "patient clinical"
-    df = search_ontology_edges(
+    rows = search_ontology_edges(
         uid,
         q,
         edge_types=list(ONTOLOGY_EDGE_TYPES),
         limit=15,
     )
-    if df.empty:
+    if not rows:
         return "No matching ontology edges."
-    return df.to_csv(index=False)[:12000]
+    return rows_to_csv(rows)[:12000]
 
 
 @tool
@@ -155,13 +152,7 @@ ALL_CLINICAL_TOOLS = [
 
 
 def _make_llm(model_name: str) -> ChatOpenAI:
-    return ChatOpenAI(
-        model=model_name,
-        temperature=0.2,
-        api_key=fireworks_api_key(),
-        base_url=fireworks_base_url(),
-        reasoning_effort=fireworks_reasoning_effort(),
-    )
+    return fireworks_chat_client(model_name, temperature=0.2)
 
 
 def get_compiled_clinical_agent(model_name: str, checkpointer: MemorySaver):

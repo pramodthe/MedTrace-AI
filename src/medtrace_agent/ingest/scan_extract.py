@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from medtrace_agent.fireworks_config import (
     fireworks_api_key,
     fireworks_base_url,
+    fireworks_chat_client,
     fireworks_reasoning_effort,
     fireworks_vlm_api_mode,
     fireworks_vlm_model,
@@ -106,14 +107,7 @@ def _extract_json_object(raw: str) -> dict[str, Any]:
 
 
 def _get_vlm_llm(model: str) -> ChatOpenAI:
-    return ChatOpenAI(
-        model=model,
-        temperature=0.1,
-        api_key=fireworks_api_key(),
-        base_url=fireworks_base_url(),
-        max_tokens=8192,
-        reasoning_effort=fireworks_reasoning_effort(),
-    )
+    return fireworks_chat_client(model, temperature=0.1, max_tokens=8192)
 
 
 def _fireworks_completions_vlm_prompt(user_block: str) -> str:

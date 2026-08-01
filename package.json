@@ -2,18 +2,17 @@
   "name": "medtrace-monorepo",
   "private": true,
   "version": "0.0.0",
-  "description": "Monorepo: radiology imaging stack + Medtrace clinical stack. One command to run everything in dev.",
+  "description": "One FastAPI service (clinical + imaging) and one web app, plus the transcription prototype.",
   "scripts": {
-    "dev": "concurrently -k -n rad-api,rad-web,med-api,med-web -c blue,cyan,magenta,green \"npm:dev:radiology-api\" \"npm:dev:radiology-web\" \"npm:dev:medtrace-api\" \"npm:dev:medtrace-web\"",
-    "dev:radiology": "concurrently -k -n rad-api,rad-web -c blue,cyan \"npm:dev:radiology-api\" \"npm:dev:radiology-web\"",
-    "dev:medtrace": "concurrently -k -n med-api,med-web -c magenta,green \"npm:dev:medtrace-api\" \"npm:dev:medtrace-web\"",
-    "dev:radiology-api": "./.venv/bin/uvicorn app:app --app-dir services/radiology-api --host 127.0.0.1 --port 8000 --reload",
-    "dev:radiology-web": "npm --prefix apps/radiology-web run dev",
-    "dev:medtrace-api": "./.venv/bin/uvicorn apps.api.main:app --host 127.0.0.1 --port 8001 --reload",
-    "dev:medtrace-web": "VITE_API_BASE_URL=http://localhost:8001 npm --prefix apps/medtrace-web run dev",
-    "dev:streamlit": "./.venv/bin/streamlit run apps/streamlit_app.py --server.port 8501",
-    "test:py": "./.venv/bin/pytest -m \"not integration\"",
-    "build:web": "npm --prefix apps/radiology-web run build && npm --prefix apps/medtrace-web run build"
+    "dev": "concurrently -k -n api,web -c magenta,green \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:api": "./.venv/bin/uvicorn apps.api.main:app --host 127.0.0.1 --port 8001 --reload",
+    "dev:web": "npm --prefix apps/web run dev",
+    "dev:transcription": "concurrently -k -n tr-api,tr-copilot -c yellow,red \"npm:dev:transcription-api\" \"npm:dev:transcription-copilot\"",
+    "dev:transcription-api": "cd services/transcription/backend && PORT=8010 ../../../.venv/bin/python main.py",
+    "dev:transcription-copilot": "AGENT_URL=http://localhost:8010 npm --prefix services/transcription/copilotkit-server run dev",
+    "lint": "npm --prefix apps/web run lint",
+    "build": "npm --prefix apps/web run build",
+    "test:py": "./.venv/bin/pytest -m \"not integration\""
   },
   "devDependencies": {
     "concurrently": "^9.1.0"

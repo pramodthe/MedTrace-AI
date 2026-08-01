@@ -1,7 +1,7 @@
-"""Pydantic schemas shared between FastAPI routers and the React Frontend.
+"""Pydantic schemas shared between the FastAPI routers and the React frontend.
 
-Field names mirror the existing ``Frontend/src/data/mockData.ts`` mock types so
-swap-in is one-for-one without UI changes.
+Field names are snake_case throughout — the web client mirrors them verbatim in
+``src/lib/types.ts``.
 """
 
 from __future__ import annotations
@@ -179,3 +179,60 @@ class ClinicalSnapshotOut(BaseModel):
     timeline: list[TimelineEvent] = Field(default_factory=list)
     documents: list[DocumentOut] = Field(default_factory=list)
     doctor_checklist: list[str] = Field(default_factory=list)
+
+
+# ---- Imaging (DICOM studies, segmentation, draft reports) --------------------
+
+ReportSource = Literal["mock", "medgemma", "qwen-vl"]
+
+
+class RoiPrompt(BaseModel):
+    """Region of interest as fractions of image width/height (0–1)."""
+
+    x: float = Field(ge=0, le=1)
+    y: float = Field(ge=0, le=1)
+    width: float = Field(gt=0, le=1)
+    height: float = Field(gt=0, le=1)
+
+
+class StudyOut(BaseModel):
+    id: str
+    patient_name: str = "Uploaded Study"
+    patient_detail: str = "DICOM metadata pending"
+    modality: str = "DICOM"
+    body_part: str = "Unspecified"
+    series: str = "Uploaded series"
+    slices: int = 1
+    uploaded_file_name: str
+    is_dicom: bool = True
+    preview_url: str | None = None
+
+
+class SegmentationRequest(BaseModel):
+    prompt: RoiPrompt
+
+
+class SegmentationOut(BaseModel):
+    id: str
+    label: str
+    confidence: float
+    volume_ml: float
+    # `mock` means no model ran — the box is the caller's own prompt echoed back.
+    source: Literal["medsam2", "mock"]
+    box: RoiPrompt
+    overlay_url: str | None = None
+
+
+class ReportRequest(BaseModel):
+    modality: str
+    body_part: str
+    segmentations: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ReportOut(BaseModel):
+    summary: str
+    findings: str
+    impression: str
+    recommendation: str
+    confidence: float
+    source: ReportSource

@@ -16,33 +16,10 @@ from pathlib import Path
 
 import httpx
 
+from medtrace_agent.patient_json import derive_age, derive_primary_doctor
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MOCK_DIR = REPO_ROOT / "mock" / "patient_data"
-
-
-def derive_age(age_band: str | None) -> int | None:
-    if not age_band:
-        return None
-    parts = age_band.replace("plus", "").replace("+", "").split("-")
-    try:
-        nums = [int(p.strip()) for p in parts if p.strip().isdigit()]
-        if not nums:
-            return None
-        return sum(nums) // len(nums)
-    except Exception:
-        return None
-
-
-def derive_primary_doctor(record: dict) -> str:
-    cohort = record.get("cohort") or "demo"
-    scenario = record.get("scenario") or ""
-    if "radiology" in scenario.lower():
-        return "Dr. Patel (Radiology)"
-    if "cardio" in scenario.lower() or "heart" in scenario.lower():
-        return "Dr. Lin (Cardiology)"
-    if "endocrin" in scenario.lower() or "diabetes" in scenario.lower():
-        return "Dr. Morales (Endocrinology)"
-    return f"Dr. {cohort.split('-')[0].title()} (Primary care)"
 
 
 def main() -> int:
@@ -94,7 +71,7 @@ def main() -> int:
             payload = {
                 "zep_user_id": zep_user_id,
                 "display_name": display_name,
-                "age": derive_age(demographics.get("age_band")) or 0,
+                "age": derive_age(demographics.get("age_band")),
                 "sex": "O",
                 "primary_doctor": derive_primary_doctor(record),
                 "notes": record.get("notes"),

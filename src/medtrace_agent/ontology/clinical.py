@@ -10,6 +10,9 @@ fields on ClinicalFact; Symptom/Insight/SuggestedTask are deferred or folded int
 
 from __future__ import annotations
 
+import logging
+import os
+
 from pydantic import Field
 
 from zep_cloud import EntityEdgeSourceTarget
@@ -22,6 +25,8 @@ from zep_cloud.external_clients.ontology import (
 )
 
 from medtrace_agent.zep.memory import get_zep_client
+
+_logger = logging.getLogger(__name__)
 
 # For graph.search filters (custom type names match EntityModel class registrations).
 ONTOLOGY_NODE_LABELS: list[str] = [
@@ -433,3 +438,38 @@ def apply_clinical_ontology(
     if scope_to_user and user_id:
         kwargs["user_ids"] = [user_id]
     client.graph.set_ontology(**kwargs)
+
+
+def clinical_ontology_auto_apply_enabled() -> bool:
+    """True unless ``AUTO_APPLY_ZEP_ONTOLOGY`` is explicitly switched off."""
+    flag = (os.environ.get("AUTO_APPLY_ZEP_ONTOLOGY") or "true").strip().lower()
+    return flag not in ("0", "false", "no", "off")
+
+
+def auto_apply_clinical_ontology(logger: logging.Logger | None = None) -> bool:
+    """Register the ontology at startup; log and swallow failures instead of raising.
+
+    The clinical read paths in ``apps/api`` search Zep by the node labels and edge types
+    defined here (``Condition``, ``Medication``, ``Allergy``, …). If the ontology is never
+    registered those searches return nothing and the dashboard silently renders empty, so
+    this runs on every boot. ``graph.set_ontology`` is project-wide and idempotent.
+
+    Returns True when the ontology was applied.
+    """
+    log = logger or _logger
+    if not clinical_ontology_auto_apply_enabled():
+        log.info("AUTO_APPLY_ZEP_ONTOLOGY is off; skipping clinical ontology registration.")
+        return False
+    if not (os.environ.get("ZEP_API_KEY") or "").strip():
+        log.warning(
+            "ZEP_API_KEY is not set; skipping clinical ontology registration. "
+            "Clinical endpoints will return empty results until Zep is configured."
+        )
+        return False
+    try:
+        apply_clinical_ontology()
+    except Exception as exc:  # noqa: BLE001 — startup must not fail on a Zep hiccup
+        log.warning("Clinical ontology registration failed: %s", exc)
+        return False
+    log.info("Clinical ontology registered (project-wide).")
+    return True

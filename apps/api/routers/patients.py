@@ -13,9 +13,16 @@ from apps.api.dependencies import (
     get_demo_profile_id,
 )
 from apps.api.schemas import (
+    AbnormalFindingOut,
+    AlertOut,
+    AllergyOut,
     ClinicalSnapshotOut,
+    ConditionOut,
     CreatePatientIn,
+    LabTrendOut,
+    MedicationOut,
     PatientOut,
+    TimelineEvent,
 )
 from medtrace_agent.fireworks_config import fireworks_chat_model
 from medtrace_agent.insforge_api import (
@@ -218,10 +225,62 @@ def get_snapshot(chart_subject_id: str) -> ClinicalSnapshotOut:
 
     documents = [_row_to_document(r) for r in docs_rows]
     patient = _row_to_patient(row, document_count=len(documents))
+    meta = _meta(row)
+    clinical = meta.get("clinical") if isinstance(meta.get("clinical"), dict) else {}
+
+    # Local-mock (and any seed that embeds clinical fixtures) prefers metadata
+    # so the dashboard works without Zep graph content.
+    if clinical:
+        return ClinicalSnapshotOut(
+            patient=patient,
+            insights=_insights(zep_user_id, meta),
+            active_conditions=[
+                ConditionOut.model_validate(c)
+                for c in clinical.get("conditions") or []
+                if isinstance(c, dict)
+            ],
+            current_medications=[
+                MedicationOut.model_validate(c)
+                for c in clinical.get("medications") or []
+                if isinstance(c, dict)
+            ],
+            allergies=[
+                AllergyOut.model_validate(c)
+                for c in clinical.get("allergies") or []
+                if isinstance(c, dict)
+            ],
+            recent_abnormal=[
+                AbnormalFindingOut.model_validate(c)
+                for c in clinical.get("recent_abnormal") or []
+                if isinstance(c, dict)
+            ],
+            risk_alerts=[
+                AlertOut.model_validate(c)
+                for c in clinical.get("alerts") or []
+                if isinstance(c, dict)
+            ],
+            lab_trends=[
+                LabTrendOut.model_validate(c)
+                for c in clinical.get("labs") or []
+                if isinstance(c, dict)
+            ],
+            timeline=[
+                TimelineEvent.model_validate(c)
+                for c in clinical.get("timeline") or []
+                if isinstance(c, dict)
+            ],
+            documents=documents,
+            doctor_checklist=meta.get("doctor_checklist")
+            or [
+                "Review elevated HbA1c trend",
+                "Confirm medication adherence",
+                "Check documented allergies before prescribing antibiotics",
+            ],
+        )
 
     return ClinicalSnapshotOut(
         patient=patient,
-        insights=_insights(zep_user_id, _meta(row)),
+        insights=_insights(zep_user_id, meta),
         active_conditions=_conditions(zep_user_id),
         current_medications=_medications(zep_user_id),
         allergies=_allergies(zep_user_id),
@@ -230,7 +289,8 @@ def get_snapshot(chart_subject_id: str) -> ClinicalSnapshotOut:
         lab_trends=_labs(zep_user_id),
         timeline=_timeline(zep_user_id),
         documents=documents,
-        doctor_checklist=_meta(row).get("doctor_checklist") or [
+        doctor_checklist=meta.get("doctor_checklist")
+        or [
             "Review elevated HbA1c trend",
             "Confirm medication adherence",
             "Check documented allergies before prescribing antibiotics",

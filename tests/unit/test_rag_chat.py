@@ -42,7 +42,7 @@ def test_chat_with_memory_invokes_llm(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("FIREWORKS_API_KEY", "k")
     mock_resp = MagicMock()
     mock_resp.content = "Assistant reply"
-    with patch("medtrace_agent.agents.rag_chat.ChatOpenAI") as llm_cls:
+    with patch("medtrace_agent.agents.rag_chat.fireworks_chat_client") as llm_cls:
         llm_cls.return_value.invoke.return_value = mock_resp
         out = chat_with_memory(
             user_input="question",
@@ -62,7 +62,7 @@ def test_chat_with_memory_invokes_llm(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_chat_with_memory_includes_doc_catalog_instructions() -> None:
     mock_resp = MagicMock()
     mock_resp.content = "ok"
-    with patch("medtrace_agent.agents.rag_chat.ChatOpenAI") as llm_cls:
+    with patch("medtrace_agent.agents.rag_chat.fireworks_chat_client") as llm_cls:
         llm_cls.return_value.invoke.return_value = mock_resp
         chat_with_memory(
             user_input="q",
