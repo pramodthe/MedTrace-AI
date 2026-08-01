@@ -289,11 +289,11 @@ a.clinical-home-cta {
    ========================================================================== */
 
 .clinical-app-layout {
+  position: fixed;
+  inset: 3.5rem 0 0;
   display: flex;
   flex-direction: column;
-  width: 100vw;
-  height: 100vh;
-  max-height: 100vh;
+  width: 100%;
   background-color: var(--clinical-surface);
   font-family: var(--font-family);
   overflow: hidden;
@@ -1244,6 +1244,26 @@ a.clinical-home-cta {
   opacity: 0.5 !important;
   cursor: not-allowed !important;
   transform: none !important;
+}
+
+@media (max-width: 639px) {
+  :root {
+    --clinical-main-gutter: 0.75rem;
+  }
+
+  .stitch-columns-grid {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: repeat(2, minmax(24rem, 1fr));
+    overflow-x: hidden;
+    overflow-y: auto;
+    padding-right: 0.25rem;
+    scrollbar-gutter: stable;
+  }
+
+  .stitch-left-stack,
+  .stitch-insights-panel {
+    min-height: 24rem;
+  }
 }
 
 @keyframes slideUpFade {

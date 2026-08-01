@@ -15,21 +15,22 @@ const LINKS = [
 export function AppNav() {
   return (
     <nav className="sticky top-0 z-40 border-b border-border bg-surface/85 backdrop-blur">
-      <div className="mx-auto flex h-14 w-full max-w-[1440px] items-center gap-1 px-4 sm:px-6 lg:px-8">
-        <span className="mr-4 flex items-center gap-2 text-sm font-semibold text-foreground">
+      <div className="mx-auto flex h-14 w-full max-w-[1440px] items-center gap-1 px-2 sm:px-6 lg:px-8">
+        <span className="mr-1 flex items-center gap-2 text-sm font-semibold text-foreground sm:mr-4">
           <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary text-white">
             <Stethoscope size={15} />
           </span>
-          Medtrace
+          <span className="hidden sm:inline">Medtrace</span>
         </span>
         {LINKS.map(({ to, label, icon: Icon, end }) => (
           <NavLink
             key={to}
             to={to}
             end={end}
+            aria-label={label}
             className={({ isActive }) =>
               cn(
-                'inline-flex h-9 items-center gap-2 rounded-lg px-3 text-sm font-medium transition',
+                'inline-flex h-9 items-center gap-2 rounded-lg px-2 text-sm font-medium transition sm:px-3',
                 isActive
                   ? 'bg-primary/10 text-primary'
                   : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900',
@@ -37,7 +38,7 @@ export function AppNav() {
             }
           >
             <Icon size={15} />
-            {label}
+            <span className="hidden sm:inline">{label}</span>
           </NavLink>
         ))}
       </div>
