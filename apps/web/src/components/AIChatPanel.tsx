@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -32,6 +32,43 @@ export function AIChatPanel({ patientId, patientName, primaryDoctor, onUploaded 
     }
   }, [messages.length, sending]);
 
+  // Client-side reveal: only the assistant reply that lands right after a send
+  // animates. Everything else (thread history, user turns, earlier replies) is
+  // added to `revealedIds` as soon as it is seen, so it renders instantly.
+  const [revealedIds, setRevealedIds] = useState<ReadonlySet<string>>(() => new Set(['greeting']));
+  const seenIds = useRef<Set<string>>(new Set());
+  const sendingRef = useRef(false);
+
+  useEffect(() => {
+    const fresh = messages.filter((m) => !seenIds.current.has(m.id));
+    const arrivedFromSend = sendingRef.current;
+    setRevealedIds((prev) => {
+      const next = new Set(prev);
+      fresh.forEach((m, i) => {
+        const isFreshReply = arrivedFromSend && m.role === 'assistant' && i === fresh.length - 1;
+        if (!isFreshReply) next.add(m.id);
+      });
+      return next;
+    });
+    fresh.forEach((m) => seenIds.current.add(m.id));
+    sendingRef.current = sending;
+  }, [messages, sending]);
+
+  const scrollToBottom = useCallback(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, []);
+
+  const markRevealed = useCallback((id: string) => {
+    setRevealedIds((prev) => {
+      if (prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.add(id);
+      return next;
+    });
+  }, []);
+
   const greeting: ChatMessage = {
     id: 'greeting',
     role: 'assistant',
@@ -41,6 +78,9 @@ export function AIChatPanel({ patientId, patientName, primaryDoctor, onUploaded 
   };
 
   const visibleMessages = messages.length > 0 ? messages : [greeting];
+  const lastMessage = visibleMessages[visibleMessages.length - 1];
+  const animatingId =
+    lastMessage.role === 'assistant' && !revealedIds.has(lastMessage.id) ? lastMessage.id : null;
 
   const handleSend = async () => {
     const text = query.trim();
@@ -96,6 +136,12 @@ export function AIChatPanel({ patientId, patientName, primaryDoctor, onUploaded 
               >
                 {msg.role === 'user' ? (
                   <div className="whitespace-pre-wrap leading-relaxed">{msg.content}</div>
+                ) : msg.id === animatingId ? (
+                  <StreamingText
+                    content={msg.content}
+                    onProgress={scrollToBottom}
+                    onDone={() => markRevealed(msg.id)}
+                  />
                 ) : (
                   <div
                     className="
@@ -245,6 +291,50 @@ export function AIChatPanel({ patientId, patientName, primaryDoctor, onUploaded 
           </p>
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Progressive plain-text reveal for the newest assistant reply. The backend
+ * returns the whole message at once, so the "streaming" is client-side: text is
+ * appended in chunks and swapped for the rendered markdown once complete.
+ * Revealing raw text avoids re-parsing partial markdown (broken **, unclosed
+ * code fences) on every tick.
+ */
+function StreamingText({
+  content,
+  onProgress,
+  onDone,
+}: {
+  content: string;
+  onProgress: () => void;
+  onDone: () => void;
+}) {
+  const [shown, setShown] = useState(0);
+
+  useEffect(() => {
+    setShown(0);
+    // ~3s for long replies, proportionally faster for short ones.
+    const chunk = Math.max(2, Math.ceil(content.length / 180));
+    const timer = setInterval(() => {
+      setShown((prev) => Math.min(prev + chunk, content.length));
+    }, 16);
+    return () => clearInterval(timer);
+  }, [content]);
+
+  useEffect(() => {
+    if (shown > 0) onProgress();
+  }, [shown, onProgress]);
+
+  useEffect(() => {
+    if (shown >= content.length && content.length > 0) onDone();
+  }, [shown, content.length, onDone]);
+
+  return (
+    <div className="whitespace-pre-wrap leading-relaxed">
+      {content.slice(0, shown)}
+      {shown < content.length && <span className="animate-pulse text-primary">▍</span>}
     </div>
   );
 }

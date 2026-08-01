@@ -8,6 +8,7 @@ import {
 } from '@/lib/imagingApi';
 import { StudyPanel } from './StudyPanel';
 import { ViewerWorkspace } from './ViewerWorkspace';
+import type { VoiRange } from './DicomViewport';
 import { DecisionPanel } from './DecisionPanel';
 import { FeedbackDialog } from './FeedbackDialog';
 import { DEFAULT_ROI, isDicomFile } from './roi';
@@ -24,6 +25,7 @@ const EMPTY_STUDY: Study = {
   uploaded_file_name: '',
   is_dicom: false,
   preview_url: null,
+  dicom_url: null,
   status: 'ready',
   reviewDecision: 'unreviewed',
   segmentations: [],
@@ -45,7 +47,10 @@ export function ImagingWorkspace() {
   const [activeStudyId, setActiveStudyId] = useState<string | null>(null);
   const [segmentVisible, setSegmentVisible] = useState(true);
   const [zoom, setZoom] = useState(100);
-  const [brightness, setBrightness] = useState(100);
+  // Window/level and slice belong to the study being viewed, so they reset when it changes.
+  const [voi, setVoi] = useState<VoiRange | null>(null);
+  const [sliceIndex, setSliceIndex] = useState(0);
+  const [layout, setLayout] = useState<'stack' | 'mpr'>('stack');
   const [imagingStatus, setImagingStatus] = useState<ImagingStatus>(MOCK_STATUS);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
 
@@ -68,18 +73,21 @@ export function ImagingWorkspace() {
   );
 
   const handleFiles = useCallback(async (files: File[]) => {
-    for (const file of files) {
-      if (!isDicomFile(file)) continue;
+    // One study per drop: a DICOM series is many files that belong to a single volume,
+    // so they are uploaded together rather than creating one study per slice.
+    const dicoms = files.filter(isDicomFile);
+    if (dicoms.length > 0) {
+      const file = dicoms[0];
 
       const fallback: Study = {
         ...EMPTY_STUDY,
         id: `LOCAL-${Date.now()}`,
-        patient_name: file.name,
+        patient_name: dicoms.length > 1 ? `${dicoms.length} slices` : file.name,
         patient_detail: 'Local file',
         body_part: 'Unspecified',
         timestamp: 'Just now',
         series: 'DICOM series',
-        slices: 1,
+        slices: dicoms.length,
         uploaded_file_name: file.name,
         is_dicom: true,
         report: {
@@ -95,7 +103,7 @@ export function ImagingWorkspace() {
 
       let next = fallback;
       try {
-        const uploaded = await uploadStudy(file);
+        const uploaded = await uploadStudy(dicoms);
         next = { ...fallback, ...uploaded };
       } catch {
         // Backend unavailable — keep the local placeholder so the viewer still opens.
@@ -104,6 +112,10 @@ export function ImagingWorkspace() {
       setStudies((current) => [next, ...current.filter((s) => s.id !== next.id)]);
       setActiveStudyId(next.id);
       setSegmentVisible(true);
+      // New study: drop the previous study's window/level and slice position.
+      setVoi(null);
+      setSliceIndex(0);
+      setLayout('stack');
     }
   }, []);
 
@@ -177,16 +189,26 @@ export function ImagingWorkspace() {
           activeStudyId={study.id}
           studies={studies}
           onFiles={handleFiles}
-          onSelectStudy={setActiveStudyId}
+          onSelectStudy={(id) => {
+            setActiveStudyId(id);
+            setVoi(null);
+            setSliceIndex(0);
+            setLayout('stack');
+          }}
         />
 
         <ViewerWorkspace
-          brightness={brightness}
+          voi={voi}
+          sliceIndex={sliceIndex}
+          layout={layout}
           segmentVisible={segmentVisible}
           study={study}
           zoom={zoom}
           canRunSegmentation={hasLoadedStudy}
-          onBrightnessChange={setBrightness}
+          onVoiChange={setVoi}
+          onVoiLoaded={({ defaultVoi }) => setVoi(defaultVoi)}
+          onSliceChange={setSliceIndex}
+          onLayoutChange={setLayout}
           onRunSegmentation={runSegmentation}
           onSegmentVisibleChange={setSegmentVisible}
           onZoomChange={setZoom}

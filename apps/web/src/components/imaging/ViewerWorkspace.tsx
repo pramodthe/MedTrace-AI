@@ -1,21 +1,40 @@
-import { type DragEvent, type MouseEvent, useMemo, useRef, useState } from 'react';
-import { Brain, Layers, Loader2, Moon, Sun, Upload, ZoomIn, ZoomOut } from 'lucide-react';
+import { type DragEvent, type MouseEvent, useRef, useState } from 'react';
+import { Box, Brain, Layers, Loader2, Moon, Square, Sun, Upload, ZoomIn, ZoomOut } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { RoiBox, Segmentation, Study } from '@/lib/types';
 import { DEFAULT_ROI, clamp01, isUsableRoi, normalizeRoi } from './roi';
+import { DicomViewport, type VoiRange } from './DicomViewport';
+import { MprViewport } from './MprViewport';
+import { buildImageIds } from '@/lib/cornerstone';
 
-function ViewportOverlay({ study, windowLevel }: { study: Study; windowLevel: string }) {
+// Slider bounds wide enough for CT Hounsfield units (-1024..3071) and MR signal values.
+const VOI_LIMITS = { centerMin: -1024, centerMax: 3071, widthMin: 1, widthMax: 4096 };
+
+function ViewportOverlay({
+  study,
+  voi,
+  sliceIndex,
+  gpuRendered,
+}: {
+  study: Study;
+  voi: VoiRange | null;
+  sliceIndex: number;
+  gpuRendered: boolean;
+}) {
   return (
     <>
       <div className="pointer-events-none absolute inset-x-0 top-0 flex items-center justify-between p-4 text-xs text-slate-400">
         <span>{study.uploaded_file_name ?? study.id}</span>
-        <span>{windowLevel}</span>
+        {/* Live values from the viewport, not a placeholder string. */}
+        <span className="tabular-nums">
+          {voi ? `W: ${Math.round(voi.windowWidth)}  L: ${Math.round(voi.windowCenter)}` : '—'}
+        </span>
       </div>
       <div className="pointer-events-none absolute bottom-4 left-4 rounded border border-slate-700/80 bg-black/45 px-3 py-2 text-xs text-slate-300">
-        {study.series} • Slice {Math.ceil(study.slices * 0.33)} / {study.slices}
+        {study.series || 'Series'} • Slice {Math.min(sliceIndex + 1, study.slices)} / {study.slices}
       </div>
       <div className="pointer-events-none absolute bottom-4 right-4 rounded border border-slate-700/80 bg-black/45 px-3 py-2 text-xs text-slate-300">
-        {study.is_dicom ? 'DICOM loaded' : 'Preview mode'}
+        {gpuRendered ? 'DICOM · GPU rendered' : study.is_dicom ? 'DICOM · preview' : 'Preview mode'}
       </div>
     </>
   );
@@ -88,12 +107,19 @@ function SegmentationOverlay({
 
 interface ViewerWorkspaceProps {
   study: Study;
-  brightness: number;
   segmentVisible: boolean;
   zoom: number;
+  /** Window/level applied by the GPU to the source pixel values; null = the DICOM's own. */
+  voi: VoiRange | null;
+  sliceIndex: number;
+  /** `stack` = one plane with a slice scrubber; `mpr` = axial/sagittal/coronal. */
+  layout: 'stack' | 'mpr';
   canRunSegmentation: boolean;
   onSegmentVisibleChange: (visible: boolean) => void;
-  onBrightnessChange: (brightness: number) => void;
+  onVoiChange: (voi: VoiRange) => void;
+  onVoiLoaded: (info: { defaultVoi: VoiRange | null }) => void;
+  onSliceChange: (index: number) => void;
+  onLayoutChange: (layout: 'stack' | 'mpr') => void;
   onZoomChange: (zoom: number) => void;
   onRunSegmentation: (prompt?: RoiBox) => void;
   onFiles: (files: File[]) => void;
@@ -101,24 +127,26 @@ interface ViewerWorkspaceProps {
 
 export function ViewerWorkspace({
   study,
-  brightness,
   segmentVisible,
   zoom,
+  voi,
+  sliceIndex,
+  layout,
   canRunSegmentation,
   onSegmentVisibleChange,
-  onBrightnessChange,
+  onVoiChange,
+  onVoiLoaded,
+  onSliceChange,
+  onLayoutChange,
   onZoomChange,
   onRunSegmentation,
   onFiles,
 }: ViewerWorkspaceProps) {
+  const [renderError, setRenderError] = useState<string | null>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   const [draftRoi, setDraftRoi] = useState<RoiBox | null>(null);
   const [roiStart, setRoiStart] = useState<{ x: number; y: number } | null>(null);
   const [isDragging, setIsDragging] = useState(false);
-  const windowLevel = useMemo(
-    () => (study.modality === 'CT' || study.modality === 'DICOM' ? 'W: 420 L: 38' : 'Auto WL'),
-    [study.modality],
-  );
 
   const getPoint = (event: MouseEvent<HTMLDivElement>) => {
     const rect = viewportRef.current?.getBoundingClientRect();
@@ -197,46 +225,94 @@ export function ViewerWorkspace({
             <Layers className="h-4 w-4" />
             {segmentVisible ? 'Hide Masks' : 'Show Masks'}
           </button>
+
+          {/* MPR needs per-slice geometry; without it sagittal/coronal are undefined. */}
+          <button
+            className={cn(
+              'inline-flex h-9 items-center gap-2 rounded-md border px-3 text-sm font-medium transition disabled:opacity-40',
+              layout === 'mpr'
+                ? 'border-cyan-300/40 bg-cyan-400/10 text-cyan-100'
+                : 'border-slate-700 bg-slate-950 text-slate-400',
+            )}
+            type="button"
+            disabled={!study.has_volume_geometry}
+            title={
+              study.has_volume_geometry
+                ? 'Reconstruct axial, sagittal and coronal planes from the volume'
+                : 'This study has no per-slice position/orientation/spacing, so it cannot be resliced'
+            }
+            onClick={() => onLayoutChange(layout === 'mpr' ? 'stack' : 'mpr')}
+          >
+            {layout === 'mpr' ? <Square className="h-4 w-4" /> : <Box className="h-4 w-4" />}
+            {layout === 'mpr' ? 'Single plane' : 'MPR 3D'}
+          </button>
         </div>
       </header>
 
-      <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-slate-800 bg-[#070b12] px-4 py-2">
-        <p className="text-xs text-slate-400">
-          Workflow: draw an ROI on the image to run MedSAM2 for that region; use the Masks toggle to
-          review overlays.
-        </p>
-        <div className="flex min-w-[220px] items-center gap-3 text-xs text-slate-300">
-          <button
-            className="grid h-7 w-7 place-items-center rounded-md border border-slate-800 bg-slate-950 text-slate-400 transition hover:border-amber-300/40 hover:text-amber-100"
-            title="Decrease brightness"
-            type="button"
-            onClick={() => onBrightnessChange(Math.max(45, brightness - 10))}
-          >
-            <Moon className="h-4 w-4" />
-          </button>
+      <div className="flex shrink-0 flex-wrap items-center gap-x-5 gap-y-2 border-b border-slate-800 bg-[#070b12] px-4 py-2">
+        {/* True window/level: these drive a GPU shader range over the DICOM's own pixel
+            values, so widening the window recovers detail a flattened PNG would have lost. */}
+        <div className="flex min-w-[210px] flex-1 items-center gap-3 text-xs text-slate-300">
+          <Moon className="h-4 w-4 shrink-0 text-slate-500" aria-label="Window level (brightness)" />
           <input
             className="h-1.5 w-full cursor-pointer accent-amber-300"
             type="range"
-            min="45"
-            max="180"
-            step="5"
-            value={brightness}
-            aria-label="Image brightness"
-            onChange={(event) => onBrightnessChange(Number(event.target.value))}
+            min={VOI_LIMITS.centerMin}
+            max={VOI_LIMITS.centerMax}
+            step={1}
+            value={voi?.windowCenter ?? 0}
+            disabled={!voi}
+            aria-label="Window level"
+            onChange={(e) =>
+              voi && onVoiChange({ ...voi, windowCenter: Number(e.target.value) })
+            }
           />
-          <button
-            className="grid h-7 w-7 place-items-center rounded-md border border-slate-800 bg-slate-950 text-slate-400 transition hover:border-amber-300/40 hover:text-amber-100"
-            title="Increase brightness"
-            type="button"
-            onClick={() => onBrightnessChange(Math.min(180, brightness + 10))}
-          >
-            <Sun className="h-4 w-4" />
-          </button>
-          <span className="w-11 text-right font-medium">{brightness}%</span>
+          <span className="w-24 shrink-0 text-right font-medium tabular-nums">
+            L {voi ? Math.round(voi.windowCenter) : '—'}
+          </span>
         </div>
 
-        <div className="flex min-w-[220px] items-center gap-3 text-xs text-slate-300">
-          <ZoomOut className="h-4 w-4 text-slate-500" />
+        <div className="flex min-w-[210px] flex-1 items-center gap-3 text-xs text-slate-300">
+          <Sun className="h-4 w-4 shrink-0 text-slate-500" aria-label="Window width (contrast)" />
+          <input
+            className="h-1.5 w-full cursor-pointer accent-amber-300"
+            type="range"
+            min={VOI_LIMITS.widthMin}
+            max={VOI_LIMITS.widthMax}
+            step={1}
+            value={voi?.windowWidth ?? 1}
+            disabled={!voi}
+            aria-label="Window width"
+            onChange={(e) =>
+              voi && onVoiChange({ ...voi, windowWidth: Math.max(1, Number(e.target.value)) })
+            }
+          />
+          <span className="w-24 shrink-0 text-right font-medium tabular-nums">
+            W {voi ? Math.round(voi.windowWidth) : '—'}
+          </span>
+        </div>
+
+        {study.slices > 1 && layout === 'stack' && (
+          <div className="flex min-w-[210px] flex-1 items-center gap-3 text-xs text-slate-300">
+            <Layers className="h-4 w-4 shrink-0 text-slate-500" aria-label="Slice" />
+            <input
+              className="h-1.5 w-full cursor-pointer accent-cyan-400"
+              type="range"
+              min={0}
+              max={study.slices - 1}
+              step={1}
+              value={sliceIndex}
+              aria-label="Slice"
+              onChange={(e) => onSliceChange(Number(e.target.value))}
+            />
+            <span className="w-24 shrink-0 text-right font-medium tabular-nums">
+              {sliceIndex + 1} / {study.slices}
+            </span>
+          </div>
+        )}
+
+        <div className="flex min-w-[180px] flex-1 items-center gap-3 text-xs text-slate-300">
+          <ZoomOut className="h-4 w-4 shrink-0 text-slate-500" />
           <input
             className="h-1.5 w-full cursor-pointer accent-cyan-400"
             type="range"
@@ -247,11 +323,25 @@ export function ViewerWorkspace({
             aria-label="Image zoom"
             onChange={(event) => onZoomChange(Number(event.target.value))}
           />
-          <ZoomIn className="h-4 w-4 text-slate-500" />
-          <span className="w-10 text-right font-medium">{zoom}%</span>
+          <ZoomIn className="h-4 w-4 shrink-0 text-slate-500" />
+          <span className="w-12 shrink-0 text-right font-medium tabular-nums">{zoom}%</span>
         </div>
       </div>
 
+      {layout === 'mpr' ? (
+        <div className="min-h-0 flex-1 p-4">
+          <MprViewport
+            imageIds={buildImageIds(study.dicom_url ?? '', study.slices, study.slice_urls)}
+            voi={voi}
+            onError={setRenderError}
+          />
+          {renderError && (
+            <p className="mt-2 rounded border border-amber-400/40 bg-amber-950/80 px-3 py-2 text-xs text-amber-100">
+              Volume reconstruction failed: {renderError}
+            </p>
+          )}
+        </div>
+      ) : (
       <div className="min-h-0 flex-1 p-4">
         <div
           ref={viewportRef}
@@ -288,14 +378,35 @@ export function ViewerWorkspace({
             if (files.length > 0) onFiles(files);
           }}
         >
-          {study.preview_url ? (
-            <img
-              className="pointer-events-none absolute inset-0 h-full w-full select-none object-contain transition-transform duration-200"
-              src={study.preview_url}
-              alt={`${study.modality} ${study.body_part} preview`}
-              draggable={false}
-              style={{ filter: `brightness(${brightness}%)`, transform: `scale(${zoom / 100})` }}
+          {study.dicom_url && !renderError ? (
+            // Rendered in the browser on the GPU from the original DICOM.
+            <DicomViewport
+              key={study.id}
+              dicomUrl={study.dicom_url}
+              frames={study.slices}
+              sliceIndex={sliceIndex}
+              voi={voi}
+              zoom={zoom}
+              onLoaded={onVoiLoaded}
+              onError={setRenderError}
             />
+          ) : study.preview_url ? (
+            // Fallback: the server-rendered thumbnail (no WebGL, or an unreadable DICOM).
+            <>
+              <img
+                className="pointer-events-none absolute inset-0 h-full w-full select-none object-contain transition-transform duration-200"
+                src={study.preview_url}
+                alt={`${study.modality} ${study.body_part} preview`}
+                draggable={false}
+                style={{ transform: `scale(${zoom / 100})` }}
+              />
+              {renderError && (
+                <div className="absolute inset-x-4 top-4 rounded border border-amber-400/40 bg-amber-950/80 px-3 py-2 text-xs text-amber-100">
+                  GPU rendering unavailable ({renderError}) — showing the server preview, so
+                  window/level is fixed.
+                </div>
+              )}
+            </>
           ) : (
             <div className="absolute inset-0 bg-[#02050a]">
               <div
@@ -319,7 +430,12 @@ export function ViewerWorkspace({
           )}
 
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_center,transparent_43%,rgba(0,0,0,0.62)_100%)]" />
-          <ViewportOverlay study={study} windowLevel={windowLevel} />
+          <ViewportOverlay
+            study={study}
+            voi={voi}
+            sliceIndex={sliceIndex}
+            gpuRendered={Boolean(study.dicom_url) && !renderError}
+          />
 
           {segmentVisible && study.segmentations.length > 0 && (
             <SegmentationOverlay segmentations={study.segmentations} zoom={zoom} />
@@ -344,6 +460,7 @@ export function ViewerWorkspace({
           )}
         </div>
       </div>
+      )}
     </section>
   );
 }
