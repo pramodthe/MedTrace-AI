@@ -2,6 +2,43 @@
 
 **“clinical decision support” or “cognitive aid”**: not replacing the doctor, but surfacing **patterns, timelines, and test ideas** the clinician still validates.
 
+## Monorepo layout & running everything
+
+This repository is a single monorepo with two product stacks that share the
+`src/medtrace_agent/` Python package:
+
+- **Medtrace clinical stack** (this README): `apps/streamlit_app.py`, `apps/api/` (FastAPI),
+  `apps/medtrace-web/` (React). Patient dashboard, clinical memory, note-taking.
+- **Radiology imaging stack** (see `CLAUDE.md`): `services/radiology-api/` (FastAPI) +
+  `apps/radiology-web/` (React). DICOM upload, MedSAM2 segmentation, draft reports.
+
+Other folders: `services/medsamlite/` (standalone segmentation demo), `services/transcription/`
+(voice/CopilotKit prototype), `migrations/`, `mock/`, `scripts/`, `tests/`.
+
+### One command for the whole dev environment
+
+```bash
+# Python: shared venv used by every Python service + tests
+python -m venv .venv
+.venv/bin/pip install -e ".[dev]"
+.venv/bin/pip install -r services/radiology-api/requirements.txt
+
+# Node: root helper + both web apps
+npm install
+npm --prefix apps/radiology-web ci
+npm --prefix apps/medtrace-web ci
+
+# Copy env (Medtrace stack needs ZEP/FIREWORKS/INSFORGE keys; radiology runs mock without keys)
+cp .env.example .env
+
+# Boot ALL services on fixed, non-conflicting ports:
+npm run dev
+```
+
+`npm run dev` starts: radiology-api (8000), radiology-web (5173), medtrace-api (8001),
+medtrace-web (3000). Scoped subsets: `npm run dev:radiology`, `npm run dev:medtrace`,
+`npm run dev:streamlit`. Python tests: `npm run test:py`.
+
 ## Sponsors & inference stack
 
 This project highlights an inference stack built with **sponsor** technologies:

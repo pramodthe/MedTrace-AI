@@ -30,9 +30,13 @@ load_dotenv(_REPO_ROOT / ".env", override=True)
 load_dotenv(_REPO_ROOT / ".env.local", override=True)
 
 # Optional: Langtrace must be initialised before LangChain / LangGraph imports.
-from medtrace_agent.tracing import init_langtrace  # noqa: E402
+# LangSmith is auto-instrumented by LangChain when LANGSMITH_TRACING + LANGSMITH_API_KEY
+# are present in the environment — load_dotenv above puts them there before any
+# LangChain modules are imported, so the auto-tracer picks them up.
+from medtrace_agent.tracing import init_langtrace, log_tracing_status  # noqa: E402
 
 init_langtrace()
+log_tracing_status()
 
 from fastapi import FastAPI  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402

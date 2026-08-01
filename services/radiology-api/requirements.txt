@@ -1,0 +1,17 @@
+fastapi>=0.115
+uvicorn[standard]>=0.30
+pydantic>=2.8
+httpx>=0.27
+numpy>=1.26
+pillow>=10.0
+pydicom>=2.4.4
+
+# Needed for local MedGemma inference:
+# torch
+# transformers
+# accelerate
+
+# Imaging/model dependencies to add when wiring full DICOM + MedSAM2:
+# pydicom
+# highdicom
+# simpleitk

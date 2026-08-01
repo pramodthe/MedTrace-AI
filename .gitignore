@@ -39,6 +39,13 @@ htmlcov/
 # Streamlit (if you add secrets locally)
 .streamlit/secrets.toml
 
+# Node / web build artifacts (all workspaces)
+node_modules/
+dist/
+
+# Radiology API runtime uploads (DICOM studies + generated previews)
+services/radiology-api/data/
+
 # Local clinical notes / uploads under data/ (keep .gitkeep only)
 data/**/*.txt
 data/**/*.pdf

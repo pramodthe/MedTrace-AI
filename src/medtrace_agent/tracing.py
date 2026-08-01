@@ -62,3 +62,29 @@ def init_langtrace() -> bool:
 
 def langtrace_active() -> bool:
     return _initialized
+
+
+def langsmith_active() -> bool:
+    """Return True iff LangSmith env vars are present so LangChain will auto-trace."""
+    tracing = (os.environ.get("LANGSMITH_TRACING") or os.environ.get("LANGCHAIN_TRACING_V2") or "").strip().lower()
+    key = (os.environ.get("LANGSMITH_API_KEY") or os.environ.get("LANGCHAIN_API_KEY") or "").strip()
+    return tracing in ("true", "1", "yes") and bool(key)
+
+
+def log_tracing_status(logger: logging.Logger | None = None) -> None:
+    """One-shot startup log: which tracer (if any) is wired up."""
+    log = logger or _logger
+    if langsmith_active():
+        project = (os.environ.get("LANGSMITH_PROJECT") or "default").strip()
+        log.warning(
+            "LangSmith tracing ENABLED → project=%s, dashboard=https://smith.langchain.com/o/-/projects/p/%s",
+            project,
+            project,
+        )
+    elif langtrace_active():
+        log.warning("Langtrace tracing ENABLED")
+    else:
+        log.warning(
+            "No tracing exporter active. To enable LangSmith, set LANGSMITH_API_KEY in .env "
+            "(LANGSMITH_TRACING=true is already set)."
+        )

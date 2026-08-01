@@ -1,0 +1,67 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+  background: #060b14;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  background: #060b14;
+}
+
+button,
+textarea {
+  font: inherit;
+}
+
+.medical-scan {
+  background:
+    radial-gradient(ellipse at 50% 70%, rgba(248, 250, 252, 0.78) 0 9%, transparent 10%),
+    radial-gradient(ellipse at 42% 57%, rgba(235, 242, 248, 0.66) 0 15%, transparent 16%),
+    radial-gradient(ellipse at 58% 57%, rgba(235, 242, 248, 0.64) 0 15%, transparent 16%),
+    radial-gradient(ellipse at 42% 55%, rgba(13, 20, 30, 0.72) 0 10%, transparent 11%),
+    radial-gradient(ellipse at 58% 55%, rgba(13, 20, 30, 0.72) 0 10%, transparent 11%),
+    radial-gradient(ellipse at 50% 32%, rgba(226, 232, 240, 0.72) 0 5%, transparent 6%),
+    linear-gradient(90deg, transparent 0 49.1%, rgba(226, 232, 240, 0.7) 49.35% 50.65%, transparent 50.9%),
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.025) 0 1px, transparent 1px 10px),
+    repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.018) 0 1px, transparent 1px 12px),
+    radial-gradient(ellipse at center, #111827 0 22%, #05070d 46%, #000 80%);
+  filter: contrast(1.08) brightness(0.9) grayscale(1);
+}
+
+.medical-scan::before,
+.medical-scan::after {
+  position: absolute;
+  content: "";
+  border-radius: 50%;
+  filter: blur(1px);
+}
+
+.medical-scan::before {
+  inset: 14% 25% 9%;
+  border: 16px solid rgba(238, 245, 252, 0.28);
+  box-shadow:
+    inset 0 0 34px rgba(255, 255, 255, 0.2),
+    0 0 80px rgba(147, 197, 253, 0.12);
+}
+
+.medical-scan::after {
+  left: 36%;
+  top: 28%;
+  width: 30%;
+  height: 48%;
+  border: 9px solid rgba(226, 232, 240, 0.22);
+  border-left-color: rgba(248, 250, 252, 0.38);
+  border-right-color: rgba(248, 250, 252, 0.38);
+}
